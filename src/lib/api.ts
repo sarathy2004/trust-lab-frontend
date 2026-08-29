@@ -52,6 +52,8 @@ export const templatesApi = {
     request<void>(`/templates/${templateId}/groups/${groupId}`, { method: "DELETE" }),
   addCharacteristic: (groupId: number, data: TemplateCharacteristicCreate) =>
     request<TemplateCharacteristic>(`/templates/groups/${groupId}/characteristics`, { method: "POST", body: JSON.stringify(data) }),
+  updateCharacteristic: (charId: number, data: Partial<TemplateCharacteristicCreate>) =>
+    request<TemplateCharacteristic>(`/templates/characteristics/${charId}`, { method: "PUT", body: JSON.stringify(data) }),
   removeCharacteristic: (charId: number) =>
     request<void>(`/templates/characteristics/${charId}`, { method: "DELETE" }),
   addCharOption: (tcId: number, data: TemplateCharacteristicOptionCreate) =>
@@ -81,11 +83,16 @@ export const productsApi = {
   getClassMappings: (productId: number) => request<ClassMapping[]>(`/products/${productId}/class-mappings`),
   addValue: (versionId: number, data: ProductValueCreate) =>
     request<ProductValue>(`/products/versions/${versionId}/values`, { method: "POST", body: JSON.stringify(data) }),
+  updateValue: (valueId: number, data: Partial<ProductValueCreate>) =>
+    request<ProductValue>(`/products/values/${valueId}`, { method: "PUT", body: JSON.stringify(data) }),
+  deleteValue: (valueId: number) =>
+    request<void>(`/products/values/${valueId}`, { method: "DELETE" }),
   getValues: (versionId: number) => request<ProductValue[]>(`/products/versions/${versionId}/values`),
   addOptionValue: (versionId: number, data: ProductOptionValueCreate) =>
     request<ProductOptionValue>(`/products/versions/${versionId}/option-values`, { method: "POST", body: JSON.stringify(data) }),
   getOptionValues: (versionId: number) => request<ProductOptionValue[]>(`/products/versions/${versionId}/option-values`),
 };
+
 
 // ── Comparisons ───────────────────────────────────────────────────────────────
 export const comparisonsApi = {
@@ -93,7 +100,9 @@ export const comparisonsApi = {
   create: (data: ComparisonRunCreate) => request<ComparisonRun>("/comparisons", { method: "POST", body: JSON.stringify(data) }),
   get: (id: number) => request<ComparisonRun>(`/comparisons/${id}`),
   getResults: (id: number) => request<RankedResult[]>(`/comparisons/${id}/results`),
+  rerank: (id: number) => request<ComparisonRun>(`/comparisons/${id}/rerank`, { method: "POST" }),
 };
+
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -128,11 +137,13 @@ export interface RankingGroupCreate { name: string; code: string; priority: numb
 export interface TemplateCharacteristic {
   id: number; ranking_group_id: number; characteristic_id: number; priority: number; required: boolean;
   scoring_method: string; direction?: string; display_order: number; is_active: boolean;
+  scoring_config_json?: Record<string, any>;
   characteristic: Characteristic; template_options: TemplateCharacteristicOption[];
 }
 export interface TemplateCharacteristicCreate {
   ranking_group_id: number; characteristic_id: number; priority: number; required?: boolean;
   scoring_method: string; direction?: string; display_order?: number;
+  scoring_config_json?: Record<string, any>;
   template_options?: TemplateCharacteristicOptionCreate[];
 }
 export interface TemplateCharacteristicOption {
@@ -165,9 +176,12 @@ export interface ProductValueCreate {
 }
 export interface ProductOptionValue {
   id: number; product_version_id: number; characteristic_option_id: number;
-  value_boolean?: boolean; value_numeric?: number; value_text?: string; status: string;
+  value_boolean?: boolean; value_numeric?: number; value_text?: string; status?: string; license_dependency?: string;
 }
-export interface ProductOptionValueCreate { characteristic_option_id: number; value_boolean?: boolean; value_numeric?: number; value_text?: string; }
+export interface ProductOptionValueCreate {
+  characteristic_option_id: number; value_boolean?: boolean; value_numeric?: number; value_text?: string; status?: string; license_dependency?: string;
+}
+
 export interface ClassMapping { id: number; product_class_id: number; eligibility_status: string; }
 
 export interface ComparisonRun {
