@@ -483,15 +483,22 @@ function ResultsView({ runId, assetProductId }: { runId: number; assetProductId?
                         <div className="breakdown-score" style={{ color: scoreColor(cs.normalized_score) }}>{fmt(cs.normalized_score)}</div>
                         <div className="breakdown-weight">{pct(cs.weight)}</div>
                       </div>
-                      {/* Threat Intel / RISK details */}
-                      {Boolean(cs.calculation_details && cs.calculation_details.method === "RISK" && cs.calculation_details.raw_value) && (
-                        <div style={{ paddingLeft: 20, paddingBottom: 8, fontSize: 12, color: "var(--muted)", display: "flex", gap: 14, flexWrap: "wrap" }}>
-                          <span>🛡️ <strong>Risk Points:</strong> {String((cs.calculation_details as any)?.risk_points ?? "—")}</span>
-                          <span><strong>Crit (10pts):</strong> {String((cs.calculation_details?.raw_value as any)?.critical ?? 0)}</span>
-                          <span><strong>High (6pts):</strong> {String((cs.calculation_details?.raw_value as any)?.high ?? 0)}</span>
-                          <span><strong>Med (3pts):</strong> {String((cs.calculation_details?.raw_value as any)?.medium ?? 0)}</span>
-                          <span><strong>Low (1pt):</strong> {String((cs.calculation_details?.raw_value as any)?.low ?? 0)}</span>
-                          <span><strong>KEV (+20pts):</strong> {String((cs.calculation_details?.raw_value as any)?.kev ?? 0)}</span>
+                      {/* Threat Intel details */}
+                      {Boolean(cs.name === "Threat Intelligence" || (cs.calculation_details && (cs.calculation_details.method === "THREAT_SCORE" || cs.calculation_details.method === "RISK"))) && (
+                        <div style={{ paddingLeft: 20, paddingBottom: 8, fontSize: 12, color: "var(--muted)", display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
+                          <span>🛡️ <strong>Threat Score:</strong> <span style={{ color: scoreColor(cs.normalized_score), fontWeight: 700 }}>{fmt(cs.normalized_score)}/100</span></span>
+                          {Boolean((cs.calculation_details as any)?.risk_band) && (
+                            <span><strong>Risk Band:</strong> <span style={{
+                              padding: "1px 6px", borderRadius: 4, fontSize: 11, fontWeight: 700,
+                              background: (cs.calculation_details as any)?.risk_band === "LOW" ? "rgba(34,197,94,0.12)" : (cs.calculation_details as any)?.risk_band === "CRITICAL" ? "rgba(220,38,38,0.12)" : "rgba(245,158,11,0.12)",
+                              color: (cs.calculation_details as any)?.risk_band === "LOW" ? "var(--success)" : (cs.calculation_details as any)?.risk_band === "CRITICAL" ? "var(--danger)" : "var(--warning)",
+                            }}>{String((cs.calculation_details as any)?.risk_band)}</span></span>
+                          )}
+                          <span><strong>Crit:</strong> {String((cs.calculation_details?.cve_counts as any)?.critical ?? (cs.calculation_details?.raw_value as any)?.critical ?? 0)}</span>
+                          <span><strong>High:</strong> {String((cs.calculation_details?.cve_counts as any)?.high ?? (cs.calculation_details?.raw_value as any)?.high ?? 0)}</span>
+                          <span><strong>Med:</strong> {String((cs.calculation_details?.cve_counts as any)?.medium ?? (cs.calculation_details?.raw_value as any)?.medium ?? 0)}</span>
+                          <span><strong>Low:</strong> {String((cs.calculation_details?.cve_counts as any)?.low ?? (cs.calculation_details?.raw_value as any)?.low ?? 0)}</span>
+                          <span><strong>KEV:</strong> <span style={{ color: Number((cs.calculation_details?.cve_counts as any)?.kev ?? (cs.calculation_details?.raw_value as any)?.kev ?? 0) > 0 ? "var(--danger)" : "var(--muted)", fontWeight: 600 }}>{String((cs.calculation_details?.cve_counts as any)?.kev ?? (cs.calculation_details?.raw_value as any)?.kev ?? 0)}</span></span>
                         </div>
                       )}
                       {/* Child options */}
