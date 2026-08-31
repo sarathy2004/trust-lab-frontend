@@ -103,6 +103,18 @@ export const comparisonsApi = {
   rerank: (id: number) => request<ComparisonRun>(`/comparisons/${id}/rerank`, { method: "POST" }),
 };
 
+// ── Threat Intelligence & CVEs ────────────────────────────────────────────────
+export const cvesApi = {
+  list: (versionId: number) => request<ProductCVE[]>(`/products/versions/${versionId}/cves`),
+  create: (versionId: number, data: ProductCVECreate) =>
+    request<ProductCVE>(`/products/versions/${versionId}/cves`, { method: "POST", body: JSON.stringify(data) }),
+  update: (versionId: number, cveRecordId: number, data: Partial<ProductCVECreate>) =>
+    request<ProductCVE>(`/products/versions/${versionId}/cves/${cveRecordId}`, { method: "PUT", body: JSON.stringify(data) }),
+  delete: (versionId: number, cveRecordId: number) =>
+    request<void>(`/products/versions/${versionId}/cves/${cveRecordId}`, { method: "DELETE" }),
+};
+
+
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -205,3 +217,33 @@ export interface CharacteristicScore {
 }
 export interface OptionScore { option_id: number; option_name: string; child_score?: number; child_priority?: number; weighted_child_score?: number; raw_value?: Record<string, unknown>; }
 export interface EligibilityResult { product_id: number; status: string; failed_requirements_json?: unknown[]; }
+ 
+export interface ProductCVE {
+  id: number;
+  product_version_id: number;
+  cve_id: string;
+  description?: string;
+  severity: "CRITICAL" | "HIGH" | "MEDIUM" | "LOW" | "NONE";
+  cvss_score?: number;
+  epss_score?: number;
+  is_kev: boolean;
+  patch_status: "PATCHED" | "UNPATCHED" | "PARTIAL" | "UNKNOWN";
+  fixed_version?: string;
+  source?: string;
+  published_at?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ProductCVECreate {
+  cve_id: string;
+  description?: string;
+  severity: string;
+  cvss_score?: number;
+  epss_score?: number;
+  is_kev?: boolean;
+  patch_status?: string;
+  fixed_version?: string;
+  source?: string;
+  published_at?: string;
+}

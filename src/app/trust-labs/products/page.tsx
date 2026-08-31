@@ -5,10 +5,11 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import {
-  vendorsApi, productsApi, categoriesApi, productClassesApi, characteristicsApi,
+  vendorsApi, productsApi, categoriesApi, productClassesApi, characteristicsApi, cvesApi,
   type Product, type ProductVersion, type ProductValue, type ProductOptionValue, type Characteristic,
+  type ProductCVE, type ProductCVECreate,
 } from "@/lib/api";
-import { Plus, Package, X, ChevronDown, ChevronRight, Edit2, Trash2, CheckCircle2, XCircle, AlertTriangle, Key, Shield, ShieldAlert, ShieldCheck } from "lucide-react";
+import { Plus, Package, X, ChevronDown, ChevronRight, Edit2, Trash2, CheckCircle2, XCircle, AlertTriangle, Key, Shield, ShieldAlert, ShieldCheck, Bug, ExternalLink, Search, Flame } from "lucide-react";
 import { statusColor, characteristicTypeLabel, scoreColor } from "@/lib/formatting";
 
 const vendorSchema = z.object({
@@ -47,6 +48,20 @@ export default function ProductsPage() {
   const [showCompositeModal, setShowCompositeModal] = useState<{ open: boolean; char?: Characteristic }>({ open: false });
   const [showAddOptionModal, setShowAddOptionModal] = useState<{ open: boolean; charId?: number }>({ open: false });
   const [showThreatModal, setShowThreatModal] = useState(false);
+  const [showCveModal, setShowCveModal] = useState<{ open: boolean; cveToEdit?: ProductCVE }>({ open: false });
+  const [cveSearch, setCveSearch] = useState("");
+  const [cveSeverityFilter, setCveSeverityFilter] = useState("ALL");
+  const [cveForm, setCveForm] = useState({
+    cve_id: "",
+    severity: "HIGH",
+    cvss_score: "7.5",
+    epss_score: "0.25",
+    is_kev: false,
+    patch_status: "PATCHED",
+    fixed_version: "",
+    source: "Vendor PSIRT",
+    description: "",
+  });
   
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [selectedVersionId, setSelectedVersionId] = useState<number | null>(null);
@@ -92,6 +107,12 @@ export default function ProductsPage() {
   const { data: optionValues = [] } = useQuery({
     queryKey: ["option-values", selectedVersionId],
     queryFn: () => productsApi.getOptionValues(selectedVersionId!),
+    enabled: !!selectedVersionId,
+  });
+
+  const { data: versionCves = [], isLoading: isLoadingCves } = useQuery({
+    queryKey: ["cves", selectedVersionId],
+    queryFn: () => cvesApi.list(selectedVersionId!),
     enabled: !!selectedVersionId,
   });
 
@@ -257,6 +278,42 @@ export default function ProductsPage() {
       setShowThreatModal(false);
     },
   });
+
+  const saveCve = useMutation({
+    mutationFn: () => {
+      if (!selectedVersionId) throw new Error("No version selected");
+      const payload: ProductCVECreate = {
+        cve_id: cveForm.cve_id.trim().toUpperCase(),
+        severity: cveForm.severity,
+        cvss_score: cveForm.cvss_score ? parseFloat(cveForm.cvss_score) : undefined,
+        epss_score: cveForm.epss_score ? parseFloat(cveForm.epss_score) : undefined,
+        is_kev: cveForm.is_kev,
+        patch_status: cveForm.patch_status,
+        fixed_version: cveForm.fixed_version.trim() || undefined,
+        source: cveForm.source.trim() || undefined,
+        description: cveForm.description.trim() || undefined,
+      };
+      if (showCveModal.cveToEdit) {
+        return cvesApi.update(selectedVersionId, showCveModal.cveToEdit.id, payload);
+      }
+      return cvesApi.create(selectedVersionId, payload);
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["cves", selectedVersionId] });
+      setShowCveModal({ open: false });
+    },
+  });
+
+  const deleteCve = useMutation({
+    mutationFn: (cveId: number) => {
+      if (!selectedVersionId) throw new Error("No version selected");
+      return cvesApi.delete(selectedVersionId, cveId);
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["cves", selectedVersionId] });
+    },
+  });
+
 
   const openAddValueModal = () => {
     setValueForm({
@@ -618,6 +675,266 @@ export default function ProductsPage() {
                       These counts are calculated by the Threat Intelligence module and stored for audit purposes. The Ranking Engine uses only the Threat Score above.
                     </div>
                   </div>
+
+                  {/* ── Row 3: Live Per-CVE Inventory (Severity, Exploitability, KEV, Patch Status) ── */}
+                  <div style={{ marginTop: 8, borderTop: "1px solid var(--border)", paddingTop: 16 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10, marginBottom: 12 }}>
+                      <div>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                          <Bug size={16} style={{ color: "var(--danger)" }} />
+                          <div style={{ fontSize: 13, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                            Vulnerability & CVE Inventory
+                          </div>
+                          <span className="badge badge-blue">{versionCves.length} Records</span>
+                        </div>
+                        <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>
+                          Individual CVE status fetched live from backend: Severity, Exploitability (EPSS), CISA KEV exploitation, and Patch Status.
+                        </div>
+                      </div>
+
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        {/* Search */}
+                        <div style={{ position: "relative", minWidth: 180 }}>
+                          <input
+                            type="text"
+                            placeholder="Filter CVE ID / desc…"
+                            className="form-control form-control-sm"
+                            value={cveSearch}
+                            onChange={e => setCveSearch(e.target.value)}
+                            style={{ paddingLeft: 28, fontSize: 12 }}
+                          />
+                          <Search size={13} style={{ position: "absolute", left: 9, top: "50%", transform: "translateY(-50%)", color: "var(--muted)" }} />
+                        </div>
+
+                        {/* Severity filter */}
+                        <select
+                          className="form-control form-control-sm"
+                          value={cveSeverityFilter}
+                          onChange={e => setCveSeverityFilter(e.target.value)}
+                          style={{ fontSize: 12, width: 110 }}
+                        >
+                          <option value="ALL">All Severities</option>
+                          <option value="CRITICAL">Critical</option>
+                          <option value="HIGH">High</option>
+                          <option value="MEDIUM">Medium</option>
+                          <option value="LOW">Low</option>
+                          <option value="KEV">KEV Only</option>
+                        </select>
+
+                        <button
+                          className="btn btn-secondary btn-sm"
+                          onClick={() => {
+                            setCveForm({
+                              cve_id: "",
+                              severity: "HIGH",
+                              cvss_score: "7.5",
+                              epss_score: "0.25",
+                              is_kev: false,
+                              patch_status: "PATCHED",
+                              fixed_version: "",
+                              source: "Vendor PSIRT",
+                              description: "",
+                            });
+                            setShowCveModal({ open: true });
+                          }}
+                        >
+                          <Plus size={13} /> Add CVE
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* CVE Table */}
+                    {isLoadingCves ? (
+                      <div style={{ padding: 20, textAlign: "center", color: "var(--muted)", fontSize: 13 }}>
+                        Loading CVE records from backend…
+                      </div>
+                    ) : versionCves.length === 0 ? (
+                      <div style={{ padding: 20, textAlign: "center", color: "var(--muted)", background: "var(--bg-subtle)", borderRadius: 8, fontSize: 13 }}>
+                        No CVE records found for this version. Click "Add CVE" to add vulnerability records.
+                      </div>
+                    ) : (
+                      <div className="table-wrap" style={{ maxHeight: 360, overflowY: "auto", border: "1px solid var(--border)", borderRadius: 8 }}>
+                        <table>
+                          <thead>
+                            <tr style={{ background: "var(--bg-subtle)", position: "sticky", top: 0, zIndex: 2 }}>
+                              <th style={{ fontSize: 11 }}>CVE ID & Description</th>
+                              <th style={{ fontSize: 11 }}>1. Severity (CVSS)</th>
+                              <th style={{ fontSize: 11 }}>2. Exploitability (EPSS)</th>
+                              <th style={{ fontSize: 11 }}>3. CISA KEV</th>
+                              <th style={{ fontSize: 11 }}>4. Patch Status</th>
+                              <th style={{ fontSize: 11, textAlign: "right" }}>Actions</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {versionCves
+                              .filter(cve => {
+                                const matchesSearch = !cveSearch ||
+                                  cve.cve_id.toLowerCase().includes(cveSearch.toLowerCase()) ||
+                                  (cve.description && cve.description.toLowerCase().includes(cveSearch.toLowerCase()));
+                                const matchesFilter =
+                                  cveSeverityFilter === "ALL" ||
+                                  (cveSeverityFilter === "KEV" ? cve.is_kev : cve.severity === cveSeverityFilter);
+                                return matchesSearch && matchesFilter;
+                              })
+                              .map(cve => {
+                                const epssPct = cve.epss_score != null ? (cve.epss_score * 100).toFixed(1) : null;
+                                return (
+                                  <tr key={cve.id}>
+                                    {/* CVE ID & Summary */}
+                                    <td style={{ maxWidth: 280 }}>
+                                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                                        <span style={{ fontWeight: 700, fontFamily: "var(--font-mono, monospace)", fontSize: 13, color: "var(--text)" }}>
+                                          {cve.cve_id}
+                                        </span>
+                                        {cve.source && (
+                                          <span style={{ fontSize: 10, padding: "1px 6px", borderRadius: 4, background: "var(--bg-subtle)", border: "1px solid var(--border)", color: "var(--muted)" }}>
+                                            {cve.source}
+                                          </span>
+                                        )}
+                                      </div>
+                                      {cve.description && (
+                                        <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={cve.description}>
+                                          {cve.description}
+                                        </div>
+                                      )}
+                                    </td>
+
+                                    {/* 1. Severity */}
+                                    <td>
+                                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                                        <span style={{
+                                          fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 4, textTransform: "uppercase",
+                                          background: cve.severity === "CRITICAL" ? "rgba(220,38,38,0.12)"
+                                            : cve.severity === "HIGH" ? "rgba(245,158,11,0.12)"
+                                            : cve.severity === "MEDIUM" ? "rgba(234,179,8,0.12)"
+                                            : "rgba(100,116,139,0.12)",
+                                          color: cve.severity === "CRITICAL" ? "var(--danger)"
+                                            : cve.severity === "HIGH" ? "var(--warning)"
+                                            : cve.severity === "MEDIUM" ? "#d97706"
+                                            : "var(--muted)",
+                                          border: `1px solid ${
+                                            cve.severity === "CRITICAL" ? "rgba(220,38,38,0.3)"
+                                              : cve.severity === "HIGH" ? "rgba(245,158,11,0.3)"
+                                              : cve.severity === "MEDIUM" ? "rgba(234,179,8,0.3)"
+                                              : "var(--border)"
+                                          }`,
+                                        }}>
+                                          {cve.severity}
+                                        </span>
+                                        {cve.cvss_score != null && (
+                                          <span style={{ fontSize: 12, fontWeight: 700, color: "var(--text)" }}>
+                                            {cve.cvss_score.toFixed(1)}
+                                          </span>
+                                        )}
+                                      </div>
+                                    </td>
+
+                                    {/* 2. Exploitability (EPSS) */}
+                                    <td style={{ minWidth: 140 }}>
+                                      {epssPct !== null ? (
+                                        <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 11 }}>
+                                            <span style={{ fontWeight: 600, color: Number(epssPct) > 50 ? "var(--danger)" : Number(epssPct) > 20 ? "var(--warning)" : "var(--text)" }}>
+                                              {epssPct}%
+                                            </span>
+                                            <span style={{ fontSize: 10, color: "var(--muted)" }}>prob.</span>
+                                          </div>
+                                          <div style={{ width: "100%", height: 5, background: "var(--border)", borderRadius: 3, overflow: "hidden" }}>
+                                            <div style={{
+                                              width: `${Math.min(100, Number(epssPct))}%`,
+                                              height: "100%",
+                                              background: Number(epssPct) > 50 ? "var(--danger)" : Number(epssPct) > 20 ? "var(--warning)" : "var(--success)",
+                                              borderRadius: 3,
+                                            }} />
+                                          </div>
+                                        </div>
+                                      ) : (
+                                        <span style={{ color: "var(--muted)", fontSize: 12 }}>—</span>
+                                      )}
+                                    </td>
+
+                                    {/* 3. KEV Status */}
+                                    <td>
+                                      {cve.is_kev ? (
+                                        <span style={{
+                                          display: "inline-flex", alignItems: "center", gap: 4,
+                                          fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 4,
+                                          background: "rgba(220, 38, 38, 0.15)", color: "var(--danger)",
+                                          border: "1px solid rgba(220, 38, 38, 0.4)",
+                                        }}>
+                                          <Flame size={12} /> CISA KEV
+                                        </span>
+                                      ) : (
+                                        <span style={{ fontSize: 11, color: "var(--muted)", padding: "2px 6px" }}>
+                                          No
+                                        </span>
+                                      )}
+                                    </td>
+
+                                    {/* 4. Patch Status */}
+                                    <td>
+                                      <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                                        <span className={`badge ${
+                                          cve.patch_status === "PATCHED" ? "badge-green"
+                                            : cve.patch_status === "UNPATCHED" ? "badge-red"
+                                            : cve.patch_status === "PARTIAL" ? "badge-yellow" : "badge-gray"
+                                        }`} style={{ width: "fit-content", fontSize: 10 }}>
+                                          {cve.patch_status}
+                                        </span>
+                                        {cve.fixed_version && (
+                                          <span style={{ fontSize: 10, color: "var(--muted)", fontFamily: "var(--font-mono, monospace)" }}>
+                                            Fixed: {cve.fixed_version}
+                                          </span>
+                                        )}
+                                      </div>
+                                    </td>
+
+                                    {/* Actions */}
+                                    <td>
+                                      <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+                                        <button
+                                          className="btn btn-ghost btn-sm"
+                                          title="Edit CVE"
+                                          onClick={() => {
+                                            setCveForm({
+                                              cve_id: cve.cve_id,
+                                              severity: cve.severity,
+                                              cvss_score: cve.cvss_score != null ? String(cve.cvss_score) : "",
+                                              epss_score: cve.epss_score != null ? String(cve.epss_score) : "",
+                                              is_kev: cve.is_kev,
+                                              patch_status: cve.patch_status,
+                                              fixed_version: cve.fixed_version || "",
+                                              source: cve.source || "Vendor PSIRT",
+                                              description: cve.description || "",
+                                            });
+                                            setShowCveModal({ open: true, cveToEdit: cve });
+                                          }}
+                                        >
+                                          <Edit2 size={12} />
+                                        </button>
+                                        <button
+                                          className="btn btn-ghost btn-sm"
+                                          title="Delete CVE"
+                                          style={{ color: "var(--danger)" }}
+                                          onClick={() => {
+                                            if (confirm(`Delete ${cve.cve_id}?`)) {
+                                              deleteCve.mutate(cve.id);
+                                            }
+                                          }}
+                                        >
+                                          <Trash2 size={12} />
+                                        </button>
+                                      </div>
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+
 
                 </div>
               </div>
@@ -1065,7 +1382,159 @@ export default function ProductsPage() {
         </div>
       )}
 
+      {/* ── Modal: Add / Edit CVE Record ────────────────────────────────────── */}
+      {showCveModal.open && (
+        <div className="modal-backdrop" onClick={() => setShowCveModal({ open: false })}>
+          <div className="modal" style={{ maxWidth: 540 }} onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <div>
+                <div className="modal-title">
+                  {showCveModal.cveToEdit ? `Edit ${showCveModal.cveToEdit.cve_id}` : "Add Vulnerability (CVE) Record"}
+                </div>
+                <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>
+                  Set Severity, Exploitability (EPSS), CISA KEV status, and Patch Status for device version #{selectedVersionId}
+                </div>
+              </div>
+              <button className="btn btn-ghost btn-sm" onClick={() => setShowCveModal({ open: false })}><X size={16} /></button>
+            </div>
+            <div className="modal-body stack">
+              <div className="grid-2">
+                <div className="form-group">
+                  <label className="form-label">CVE Identifier *</label>
+                  <input
+                    className="form-control"
+                    placeholder="e.g. CVE-2024-21762"
+                    value={cveForm.cve_id}
+                    disabled={!!showCveModal.cveToEdit}
+                    onChange={e => setCveForm(f => ({ ...f, cve_id: e.target.value }))}
+                  />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Data Source</label>
+                  <input
+                    className="form-control"
+                    placeholder="Vendor PSIRT, NVD, CISA…"
+                    value={cveForm.source}
+                    onChange={e => setCveForm(f => ({ ...f, source: e.target.value }))}
+                  />
+                </div>
+              </div>
+
+              <div className="grid-2">
+                {/* 1. Severity */}
+                <div className="form-group">
+                  <label className="form-label">1. Severity Tier *</label>
+                  <select
+                    className="form-control"
+                    value={cveForm.severity}
+                    onChange={e => setCveForm(f => ({ ...f, severity: e.target.value }))}
+                  >
+                    <option value="CRITICAL">CRITICAL (CVSS 9.0–10.0)</option>
+                    <option value="HIGH">HIGH (CVSS 7.0–8.9)</option>
+                    <option value="MEDIUM">MEDIUM (CVSS 4.0–6.9)</option>
+                    <option value="LOW">LOW (CVSS 0.1–3.9)</option>
+                    <option value="NONE">NONE (0.0)</option>
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label className="form-label">CVSS Base Score (0.0–10.0)</label>
+                  <input
+                    type="number" min="0" max="10" step="0.1"
+                    className="form-control"
+                    placeholder="e.g. 9.8"
+                    value={cveForm.cvss_score}
+                    onChange={e => setCveForm(f => ({ ...f, cvss_score: e.target.value }))}
+                  />
+                </div>
+              </div>
+
+              <div className="grid-2">
+                {/* 2. Exploitability (EPSS) */}
+                <div className="form-group">
+                  <label className="form-label">2. Exploitability / EPSS Score (0.00–1.00)</label>
+                  <input
+                    type="number" min="0" max="1" step="0.01"
+                    className="form-control"
+                    placeholder="e.g. 0.94"
+                    value={cveForm.epss_score}
+                    onChange={e => setCveForm(f => ({ ...f, epss_score: e.target.value }))}
+                  />
+                  <div className="form-hint">Probability of active weaponized exploitation in the wild (0%–100%)</div>
+                </div>
+
+                {/* 3. KEV Status */}
+                <div className="form-group">
+                  <label className="form-label">3. CISA KEV Known Exploited</label>
+                  <div style={{ marginTop: 8 }}>
+                    <label style={{ display: "inline-flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 13 }}>
+                      <input
+                        type="checkbox"
+                        checked={cveForm.is_kev}
+                        onChange={e => setCveForm(f => ({ ...f, is_kev: e.target.checked }))}
+                        style={{ width: 16, height: 16 }}
+                      />
+                      <span style={{ fontWeight: 600, color: cveForm.is_kev ? "var(--danger)" : "var(--text)" }}>
+                        Listed in CISA KEV Catalog
+                      </span>
+                    </label>
+                  </div>
+                  <div className="form-hint">Actively leveraged in cyberattacks</div>
+                </div>
+              </div>
+
+              <div className="grid-2">
+                {/* 4. Patch Status */}
+                <div className="form-group">
+                  <label className="form-label">4. Patch Status *</label>
+                  <select
+                    className="form-control"
+                    value={cveForm.patch_status}
+                    onChange={e => setCveForm(f => ({ ...f, patch_status: e.target.value }))}
+                  >
+                    <option value="PATCHED">PATCHED</option>
+                    <option value="UNPATCHED">UNPATCHED</option>
+                    <option value="PARTIAL">PARTIAL / WORKAROUND</option>
+                    <option value="UNKNOWN">UNKNOWN</option>
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Fixed Firmware / Version</label>
+                  <input
+                    className="form-control"
+                    placeholder="e.g. 7.4.4+, Hotfix 2"
+                    value={cveForm.fixed_version}
+                    onChange={e => setCveForm(f => ({ ...f, fixed_version: e.target.value }))}
+                  />
+                </div>
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">Vulnerability Description / Advisory</label>
+                <textarea
+                  className="form-control"
+                  rows={2}
+                  placeholder="e.g. Out-of-bounds write in FortiOS SSL-VPN allows unauthenticated remote code execution"
+                  value={cveForm.description}
+                  onChange={e => setCveForm(f => ({ ...f, description: e.target.value }))}
+                />
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button className="btn btn-secondary" onClick={() => setShowCveModal({ open: false })}>Cancel</button>
+              <button
+                className="btn btn-primary"
+                disabled={!cveForm.cve_id || saveCve.isPending}
+                onClick={() => saveCve.mutate()}
+              >
+                {saveCve.isPending ? "Saving…" : showCveModal.cveToEdit ? "Update CVE" : "Add CVE Record"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── Value Modal (Create / Edit Standard Value) ─────────────────────────── */}
+
       {showValueModal.open && (
         <div className="modal-backdrop" onClick={() => setShowValueModal({ open: false })}>
           <div className="modal" onClick={e => e.stopPropagation()}>
