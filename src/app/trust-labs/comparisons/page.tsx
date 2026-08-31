@@ -196,6 +196,14 @@ function ProductSelectionStep({
 
 // ── Step 3: Results ────────────────────────────────────────────────────────────
 
+// A template's groups vary (Security/Performance/Compliance vs. Security/Performance/Common,
+// etc.) -- read them from the run's own group_scores instead of assuming fixed names.
+function getDimensions(result: RankedResult): { code: string; name: string; score?: number }[] {
+  return [...result.group_scores]
+    .sort((a, b) => a.display_order - b.display_order)
+    .map(gs => ({ code: gs.group_code, name: gs.group_name, score: gs.group_score }));
+}
+
 function ResultsView({ runId, assetProductId }: { runId: number; assetProductId?: number }) {
   const qc = useQueryClient();
   const [activeTab, setActiveTab] = useState<"ranking" | "breakdown" | "radar">("ranking");
@@ -219,20 +227,21 @@ function ResultsView({ runId, assetProductId }: { runId: number; assetProductId?
   const ineligible = results.filter(r => r.rank_status === "INELIGIBLE");
   const selectedResult = results.find(r => r.product_id === selectedProductId);
 
-  const radarData = ranked.map(r => ({
-    product: r.product_name,
-    Security: r.security_score || 0,
-    Performance: r.performance_score || 0,
-    Compliance: r.compliance_score || 0,
+  // This run's dimensions (e.g. Security/Performance/Compliance, or Security/Performance/Common)
+  // -- every ranked result in one run shares the same template, so the first one defines them all.
+  const dimensions = ranked[0] ? getDimensions(ranked[0]) : [];
+  const DIM_COLORS = ["#2563EB", "#16A34A", "#F59E0B", "#DC2626", "#7C3AED", "#0891B2"];
+
+  const radarData = dimensions.map(dim => ({
+    dimension: dim.name,
+    ...Object.fromEntries(ranked.map(r => [r.product_name, getDimensions(r).find(d => d.code === dim.code)?.score || 0])),
   }));
 
   const barData = ranked.map(r => ({
     name: r.product_name.replace("FortiGate", "FG").replace("Palo Alto", "PA").replace("Cisco", "CS").replace("Check Point", "CP"),
     overall: r.overall_score || 0,
-    security: r.security_score || 0,
-    performance: r.performance_score || 0,
-    compliance: r.compliance_score || 0,
     isAsset: r.is_current_asset,
+    ...Object.fromEntries(getDimensions(r).map(d => [d.code, d.score || 0])),
   }));
 
   const COLORS = ["#2563EB", "#16A34A", "#F59E0B", "#DC2626"];
@@ -324,9 +333,7 @@ function ResultsView({ runId, assetProductId }: { runId: number; assetProductId?
                   <th>Rank</th>
                   <th>Product</th>
                   <th>Vendor</th>
-                  <th>Security</th>
-                  <th>Performance</th>
-                  <th>Compliance</th>
+                  {dimensions.map(dim => <th key={dim.code}>{dim.name}</th>)}
                   <th>Overall Score</th>
                   <th></th>
                 </tr>
@@ -351,24 +358,14 @@ function ResultsView({ runId, assetProductId }: { runId: number; assetProductId?
                       </div>
                     </td>
                     <td style={{ color: "var(--muted)" }}>{r.vendor_name}</td>
-                    <td>
-                      <div className="score-bar">
-                        <div className="score-bar-track"><div className="score-bar-fill" style={{ width: `${r.security_score || 0}%`, background: scoreColor(r.security_score) }} /></div>
-                        <div className="score-val" style={{ color: scoreColor(r.security_score) }}>{fmt(r.security_score)}</div>
-                      </div>
-                    </td>
-                    <td>
-                      <div className="score-bar">
-                        <div className="score-bar-track"><div className="score-bar-fill" style={{ width: `${r.performance_score || 0}%`, background: scoreColor(r.performance_score) }} /></div>
-                        <div className="score-val" style={{ color: scoreColor(r.performance_score) }}>{fmt(r.performance_score)}</div>
-                      </div>
-                    </td>
-                    <td>
-                      <div className="score-bar">
-                        <div className="score-bar-track"><div className="score-bar-fill" style={{ width: `${r.compliance_score || 0}%`, background: scoreColor(r.compliance_score) }} /></div>
-                        <div className="score-val" style={{ color: scoreColor(r.compliance_score) }}>{fmt(r.compliance_score)}</div>
-                      </div>
-                    </td>
+                    {getDimensions(r).map(dim => (
+                      <td key={dim.code}>
+                        <div className="score-bar">
+                          <div className="score-bar-track"><div className="score-bar-fill" style={{ width: `${dim.score || 0}%`, background: scoreColor(dim.score) }} /></div>
+                          <div className="score-val" style={{ color: scoreColor(dim.score) }}>{fmt(dim.score)}</div>
+                        </div>
+                      </td>
+                    ))}
                     <td>
                       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                         <div style={{ width: 80, height: 8, background: "var(--border)", borderRadius: 4, overflow: "hidden" }}>
@@ -389,7 +386,7 @@ function ResultsView({ runId, assetProductId }: { runId: number; assetProductId?
                     <td><div className="rank-badge rank-n">—</div></td>
                     <td><div style={{ fontWeight: 600 }}>{r.product_name}</div></td>
                     <td style={{ color: "var(--muted)" }}>{r.vendor_name}</td>
-                    <td colSpan={4} style={{ color: "var(--danger)", fontSize: 12 }}>
+                    <td colSpan={dimensions.length + 1} style={{ color: "var(--danger)", fontSize: 12 }}>
                       <XCircle size={13} style={{ display: "inline", marginRight: 4 }} />
                       INELIGIBLE — {r.failed_requirements?.map(f => f.reason).join(", ")}
                     </td>
@@ -456,9 +453,7 @@ function ResultsView({ runId, assetProductId }: { runId: number; assetProductId?
                   <div style={{ marginTop: 16, display: "flex", gap: 20 }}>
                     {[
                       { label: "Overall Score", value: selectedResult.overall_score },
-                      { label: "Security", value: selectedResult.security_score },
-                      { label: "Performance", value: selectedResult.performance_score },
-                      { label: "Compliance", value: selectedResult.compliance_score },
+                      ...getDimensions(selectedResult).map(d => ({ label: d.name, value: d.score })),
                     ].map(({ label, value }) => (
                       <div key={label} style={{ textAlign: "center" }}>
                         <div style={{ fontSize: 22, fontWeight: 700, color: scoreColor(value) }}>{fmt(value)}</div>
@@ -535,7 +530,7 @@ function ResultsView({ runId, assetProductId }: { runId: number; assetProductId?
               <div>
                 <div className="card-title" style={{ fontSize: 16 }}>Multi-Dimension Radar Comparison</div>
                 <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>
-                  Comprehensive performance comparison across Security, Performance, and Compliance dimensions (0–100 scale)
+                  Comprehensive performance comparison across {dimensions.map(d => d.name).join(", ")} dimensions (0–100 scale)
                 </div>
               </div>
             </div>
@@ -546,11 +541,7 @@ function ResultsView({ runId, assetProductId }: { runId: number; assetProductId?
                     cx="50%"
                     cy="50%"
                     outerRadius="75%"
-                    data={[
-                      { dimension: "Security", ...Object.fromEntries(ranked.map(r => [r.product_name, r.security_score || 0])) },
-                      { dimension: "Performance", ...Object.fromEntries(ranked.map(r => [r.product_name, r.performance_score || 0])) },
-                      { dimension: "Compliance", ...Object.fromEntries(ranked.map(r => [r.product_name, r.compliance_score || 0])) },
-                    ]}
+                    data={radarData}
                   >
                     <PolarGrid stroke="#CBD5E1" strokeWidth={1} />
                     <PolarAngleAxis
@@ -604,9 +595,7 @@ function ResultsView({ runId, assetProductId }: { runId: number; assetProductId?
                       <tr>
                         <th>Product</th>
                         <th style={{ textAlign: "center" }}>Overall</th>
-                        <th style={{ textAlign: "center" }}>Security</th>
-                        <th style={{ textAlign: "center" }}>Performance</th>
-                        <th style={{ textAlign: "center" }}>Compliance</th>
+                        {dimensions.map(dim => <th key={dim.code} style={{ textAlign: "center" }}>{dim.name}</th>)}
                       </tr>
                     </thead>
                     <tbody>
@@ -620,15 +609,11 @@ function ResultsView({ runId, assetProductId }: { runId: number; assetProductId?
                           <td style={{ textAlign: "center", fontWeight: 700, color: scoreColor(r.overall_score) }}>
                             {fmt(r.overall_score)}
                           </td>
-                          <td style={{ textAlign: "center", fontWeight: 600, color: scoreColor(r.security_score) }}>
-                            {fmt(r.security_score)}
-                          </td>
-                          <td style={{ textAlign: "center", fontWeight: 600, color: scoreColor(r.performance_score) }}>
-                            {fmt(r.performance_score)}
-                          </td>
-                          <td style={{ textAlign: "center", fontWeight: 600, color: scoreColor(r.compliance_score) }}>
-                            {fmt(r.compliance_score)}
-                          </td>
+                          {getDimensions(r).map(dim => (
+                            <td key={dim.code} style={{ textAlign: "center", fontWeight: 600, color: scoreColor(dim.score) }}>
+                              {fmt(dim.score)}
+                            </td>
+                          ))}
                         </tr>
                       ))}
                     </tbody>
@@ -657,9 +642,9 @@ function ResultsView({ runId, assetProductId }: { runId: number; assetProductId?
                     }}
                   />
                   <Legend iconSize={12} wrapperStyle={{ fontSize: 12, paddingTop: 10 }} />
-                  <Bar dataKey="security" name="Security" fill="#2563EB" radius={[4,4,0,0]} />
-                  <Bar dataKey="performance" name="Performance" fill="#16A34A" radius={[4,4,0,0]} />
-                  <Bar dataKey="compliance" name="Compliance" fill="#F59E0B" radius={[4,4,0,0]} />
+                  {dimensions.map((dim, i) => (
+                    <Bar key={dim.code} dataKey={dim.code} name={dim.name} fill={DIM_COLORS[i % DIM_COLORS.length]} radius={[4, 4, 0, 0]} />
+                  ))}
                 </BarChart>
               </ResponsiveContainer>
             </div>

@@ -75,6 +75,11 @@ export default function TemplatesPage() {
     onSuccess: () => { qc.invalidateQueries({ queryKey: ["templates"] }); setShowTemplateModal(false); tmplForm.reset(); },
   });
 
+  const publishTemplate = useMutation({
+    mutationFn: (id: number) => templatesApi.update(id, { status: "PUBLISHED" }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["templates"] }); refetchSelected(); },
+  });
+
   // ── Group form ─────────────────────────────────────────────────────────────
   const groupForm = useForm<GroupForm>({ resolver: zodResolver(groupSchema) as any, defaultValues: { priority: 1, display_order: 0 } });
 
@@ -207,9 +212,24 @@ export default function TemplatesPage() {
           <div className="page-title">Ranking Templates</div>
           <div className="page-subtitle">Create and manage versioned ranking methodologies per product class</div>
         </div>
-        <button className="btn btn-primary" onClick={() => setShowTemplateModal(true)}>
-          <Plus size={15} /> New Template
-        </button>
+        <div style={{ display: "flex", gap: 10 }}>
+          {detail && detail.status === "DRAFT" && (
+            <button
+              className="btn btn-secondary"
+              disabled={publishTemplate.isPending}
+              onClick={() => {
+                if (confirm(`Publish "${detail.name}" v${detail.version}? Published templates are the official methodology and should be treated as stable.`)) {
+                  publishTemplate.mutate(detail.id);
+                }
+              }}
+            >
+              <Check size={15} /> {publishTemplate.isPending ? "Publishing…" : "Publish Template"}
+            </button>
+          )}
+          <button className="btn btn-primary" onClick={() => setShowTemplateModal(true)}>
+            <Plus size={15} /> New Template
+          </button>
+        </div>
       </div>
 
       <div className="page-content" style={{ display: "flex", gap: 20, alignItems: "flex-start" }}>

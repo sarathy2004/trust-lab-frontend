@@ -198,7 +198,10 @@ export interface RankedResult {
   eligibility_status: string; failed_requirements?: Array<{ characteristic: string; reason: string }>;
   group_scores: GroupScore[]; characteristic_scores: CharacteristicScore[];
 }
-export interface GroupScore { group_id: number; group_score?: number; group_weight?: number; weighted_group_score?: number; }
+export interface GroupScore {
+  group_id: number; group_name: string; group_code: string; display_order: number;
+  group_score?: number; group_weight?: number; weighted_group_score?: number;
+}
 export interface CharacteristicScore {
   tc_id: number; name: string; normalized_score?: number; weight?: number; weighted_score?: number;
   calculation_details?: Record<string, unknown>; option_results: OptionScore[];
