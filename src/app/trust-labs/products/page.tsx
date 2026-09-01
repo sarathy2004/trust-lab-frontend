@@ -21,10 +21,11 @@ const vendorSchema = z.object({
 const productSchema = z.object({
   vendor_id: z.coerce.number().min(1, "Required"),
   category_id: z.coerce.number().min(1, "Required"),
-  name: z.string().min(1),
+  name: z.string().min(1, "Product Name is required"),
   model: z.string().optional(),
   product_family: z.string().optional(),
   description: z.string().optional(),
+  current_os_version: z.string().optional(),
 });
 
 const versionSchema = z.object({
@@ -41,7 +42,7 @@ export default function ProductsPage() {
   const qc = useQueryClient();
   const [showVendorModal, setShowVendorModal] = useState(false);
   const [showProductModal, setShowProductModal] = useState<{ open: boolean; product?: Product }>({ open: false });
-  const [showVersionModal, setShowVersionModal] = useState<{ open: boolean; productId?: number }>({ open: false });
+  const [showVersionModal, setShowVersionModal] = useState<{ open: boolean; productId?: number; versionToEdit?: ProductVersion }>({ open: false });
   const [showMappingModal, setShowMappingModal] = useState<{ open: boolean; productId?: number }>({ open: false });
   const [showValueModal, setShowValueModal] = useState<{ open: boolean; versionId?: number; productId?: number; valueToEdit?: ProductValue }>({ open: false });
   const [showCompositeModal, setShowCompositeModal] = useState<{ open: boolean; char?: Characteristic }>({ open: false });
@@ -56,7 +57,18 @@ export default function ProductsPage() {
   const [newOptionName, setNewOptionName] = useState("");
   const [newOptionCode, setNewOptionCode] = useState("");
 
-  const [threatForm, setThreatForm] = useState({ critical: "0", high: "0", medium: "0", low: "0", kev: "0" });
+  const [threatForm, setThreatForm] = useState({
+    threat_score: "0",
+    raw_risk: "0",
+    policy_risk: "0",
+    risk_band: "UNKNOWN",
+    data_status: "COMPLETE",
+    risk_policy_version: "1.0",
+    critical: "0", high: "0", medium: "0", low: "0",
+    max_epss: "0", weaponized_count: "0",
+    kev: "0",
+    patched_count: "0", unpatched_count: "0", patch_status: "ALL_PATCHED",
+  });
 
   const [valueForm, setValueForm] = useState({
     characteristic_id: "", value_numeric: "", value_text: "", value_boolean: "", unit: "", status: "SUPPORTED",
@@ -96,19 +108,71 @@ export default function ProductsPage() {
 
   const productForm = useForm<ProductForm>({ resolver: zodResolver(productSchema) });
   const saveProduct = useMutation({
-    mutationFn: (d: ProductForm) => {
+    mutationFn: async (d: ProductForm) => {
+      const { current_os_version, ...productData } = d;
+      let prod: Product;
       if (showProductModal.product) {
-        return productsApi.update(showProductModal.product.id, d);
+        prod = await productsApi.update(showProductModal.product.id, productData);
+        if (current_os_version && current_os_version.trim()) {
+          const curVer = showProductModal.product.versions?.find(v => v.is_current) || showProductModal.product.versions?.[0];
+          if (curVer) {
+            try {
+              await productsApi.updateVersion(curVer.id, { version: current_os_version.trim() });
+            } catch {
+              await productsApi.addVersion(prod.id, { version: current_os_version.trim(), is_current: true, support_status: "ACTIVE" });
+            }
+          } else {
+            await productsApi.addVersion(prod.id, { version: current_os_version.trim(), is_current: true, support_status: "ACTIVE" });
+          }
+        }
+      } else {
+        prod = await productsApi.create(productData);
+        if (current_os_version && current_os_version.trim()) {
+          await productsApi.addVersion(prod.id, { version: current_os_version.trim(), is_current: true, support_status: "ACTIVE" });
+        }
       }
-      return productsApi.create(d);
+      const refreshed = await productsApi.get(prod.id);
+      return refreshed;
     },
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ["products"] }); setShowProductModal({ open: false }); productForm.reset(); },
+    onSuccess: (updatedProd) => {
+      qc.invalidateQueries({ queryKey: ["products"] });
+      setSelectedProduct(updatedProd);
+      const newCur = updatedProd.versions?.find(v => v.is_current) || updatedProd.versions?.[0];
+      if (newCur) setSelectedVersionId(newCur.id);
+      setShowProductModal({ open: false });
+      productForm.reset();
+    },
+    onError: (err: any) => {
+      alert("Failed to save product: " + (err?.message || "Unknown error"));
+    },
   });
 
   const versionForm = useForm<VersionForm>({ resolver: zodResolver(versionSchema) as any, defaultValues: { support_status: "ACTIVE", is_current: true } });
-  const createVersion = useMutation({
-    mutationFn: (d: VersionForm) => productsApi.addVersion(showVersionModal.productId!, d),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ["products"] }); setShowVersionModal({ open: false }); versionForm.reset(); },
+  const saveVersion = useMutation({
+    mutationFn: async (d: VersionForm) => {
+      if (showVersionModal.versionToEdit) {
+        try {
+          return await productsApi.updateVersion(showVersionModal.versionToEdit.id, d);
+        } catch {
+          return await productsApi.addVersion(showVersionModal.productId!, d);
+        }
+      }
+      return await productsApi.addVersion(showVersionModal.productId!, d);
+    },
+    onSuccess: async () => {
+      qc.invalidateQueries({ queryKey: ["products"] });
+      if (selectedProduct) {
+        const refreshed = await productsApi.get(selectedProduct.id);
+        setSelectedProduct(refreshed);
+        const newCur = refreshed.versions?.find(v => v.is_current) || refreshed.versions?.[0];
+        if (newCur) setSelectedVersionId(newCur.id);
+      }
+      setShowVersionModal({ open: false });
+      versionForm.reset();
+    },
+    onError: (err: any) => {
+      alert("Failed to save version: " + (err?.message || "Unknown error"));
+    },
   });
 
   const addMapping = useMutation({
@@ -195,27 +259,65 @@ export default function ProductsPage() {
   const threatChar = characteristics.find(c => c.characteristic_type === "RISK" || c.code === "THREAT_INTEL");
   const threatValue = productValues.find(v => v.characteristic_id === threatChar?.id);
   const threatJson = (threatValue?.value_json || {}) as Record<string, any>;
+
+  // ── Spec §25: threat_score is the authoritative value from the TI module ──
+  // The Ranking Engine reads threat_score directly. CVE counts are display-only metadata.
+  const tiThreatScore = threatJson.threat_score != null ? Number(threatJson.threat_score) : null;
+  const tiRawRisk     = threatJson.raw_risk    != null ? Number(threatJson.raw_risk)    : null;
+  const tiPolicyRisk  = threatJson.policy_risk != null ? Number(threatJson.policy_risk) : null;
+  const tiRiskBand    = (threatJson.risk_band   as string) || null;
+  const tiDataStatus  = (threatJson.data_status as string) || "UNKNOWN";
+  const tiCalcAt      = (threatJson.calculated_at as string) || null;
+  const tiPolicyVer   = (threatJson.risk_policy_version as string) || null;
+  // ── Spec §25: 4 Threat Intelligence Pillars ──────────────────────────────
+  // 1. Severity (CVSS counts)
   const critCount = Number(threatJson.critical || 0);
   const highCount = Number(threatJson.high || 0);
-  const medCount = Number(threatJson.medium || 0);
-  const lowCount = Number(threatJson.low || 0);
-  const kevCount = Number(threatJson.kev || 0);
-
-  // Total Risk Points calculation (Critical: 10, High: 6, Medium: 3, Low: 1, KEV: 20)
-  const totalRiskPoints = (critCount * 10) + (highCount * 6) + (medCount * 3) + (lowCount * 1) + (kevCount * 20);
+  const medCount  = Number(threatJson.medium  || 0);
+  const lowCount  = Number(threatJson.low     || 0);
+  // 2. Exploitability (EPSS & Weaponization)
+  const maxEpss   = threatJson.max_epss != null ? Number(threatJson.max_epss) : null;
+  const weaponizedCount = Number(threatJson.weaponized_count || 0);
+  // 3. Active Exploitation (CISA KEV)
+  const kevCount  = Number(threatJson.kev     || 0);
+  // 4. Patch Status & Remediation
+  const patchedCount   = Number(threatJson.patched_count || (critCount + highCount + medCount + lowCount));
+  const unpatchedCount = Number(threatJson.unpatched_count || 0);
+  const patchStatus    = (threatJson.patch_status as string) || (unpatchedCount > 0 ? "PARTIAL_FIXED" : "ALL_PATCHED");
 
   const saveThreatIntel = useMutation({
     mutationFn: () => {
       if (!threatChar) throw new Error("Threat characteristic not found");
+      // Spec §25: Save the full TI module response shape.
+      // threat_score is authoritative; CVE counts are display-only metadata.
+      const ts = parseFloat(threatForm.threat_score || "0");
+      const rr = parseFloat(threatForm.raw_risk || "0");
+      const pr = parseFloat(threatForm.policy_risk || "0");
       const payload: Partial<import("@/lib/api").ProductValueCreate> = {
         characteristic_id: threatChar.id,
         status: "SUPPORTED",
         value_json: {
+          threat_score:        Math.min(100, Math.max(0, ts)),
+          raw_risk:            rr,
+          policy_risk:         pr,
+          risk_band:           threatForm.risk_band || "UNKNOWN",
+          data_status:         threatForm.data_status || "COMPLETE",
+          risk_policy_version: threatForm.risk_policy_version || "1.0",
+          calculated_at:       new Date().toISOString(),
+          // 1. Severity (CVSS)
           critical: parseInt(threatForm.critical || "0"),
-          high: parseInt(threatForm.high || "0"),
-          medium: parseInt(threatForm.medium || "0"),
-          low: parseInt(threatForm.low || "0"),
-          kev: parseInt(threatForm.kev || "0"),
+          high:     parseInt(threatForm.high     || "0"),
+          medium:   parseInt(threatForm.medium   || "0"),
+          low:      parseInt(threatForm.low      || "0"),
+          // 2. Exploitability (EPSS & Weaponization)
+          max_epss:         parseFloat(threatForm.max_epss || "0"),
+          weaponized_count: parseInt(threatForm.weaponized_count || "0"),
+          // 3. Active Exploitation (CISA KEV)
+          kev:              parseInt(threatForm.kev || "0"),
+          // 4. Patch Status & Remediation
+          patched_count:    parseInt(threatForm.patched_count || "0"),
+          unpatched_count:  parseInt(threatForm.unpatched_count || "0"),
+          patch_status:     threatForm.patch_status || "ALL_PATCHED",
         },
       };
       if (threatValue) {
@@ -321,13 +423,16 @@ export default function ProductsPage() {
             <div className="card">
               <div className="card-header">
                 <div>
-                  <div className="card-title">{selectedProduct.name}</div>
-                  <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>{selectedProduct.vendor?.name} — {selectedProduct.model}</div>
+                  <div className="card-title" style={{ fontSize: 18 }}>{selectedProduct.name}</div>
+                  <div style={{ fontSize: 13, color: "var(--muted)", marginTop: 2 }}>
+                    {selectedProduct.vendor?.name} · Model: <strong style={{ color: "var(--text)" }}>{selectedProduct.model || "—"}</strong>
+                  </div>
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                   <button
                     className="btn btn-secondary btn-sm"
                     onClick={() => {
+                      const curVer = selectedProduct.versions?.find(v => v.is_current) || selectedProduct.versions?.[0];
                       productForm.reset({
                         vendor_id: selectedProduct.vendor_id,
                         category_id: selectedProduct.category_id,
@@ -335,6 +440,7 @@ export default function ProductsPage() {
                         model: selectedProduct.model || "",
                         product_family: selectedProduct.product_family || "",
                         description: selectedProduct.description || "",
+                        current_os_version: curVer?.version || "",
                       });
                       setShowProductModal({ open: true, product: selectedProduct });
                     }}
@@ -347,18 +453,36 @@ export default function ProductsPage() {
                 </div>
               </div>
               <div className="card-body">
-                <div className="grid-3">
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 16 }}>
                   <div>
                     <div style={{ fontSize: 11, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Category</div>
-                    <div style={{ fontSize: 13, fontWeight: 500, marginTop: 2 }}>{categories.find(c => c.id === selectedProduct.category_id)?.name || "—"}</div>
+                    <div style={{ fontSize: 14, fontWeight: 600, marginTop: 3 }}>{categories.find(c => c.id === selectedProduct.category_id)?.name || "—"}</div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 11, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Hardware Model</div>
+                    <div style={{ fontSize: 14, fontWeight: 600, marginTop: 3, color: "var(--primary)" }}>{selectedProduct.model || "—"}</div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 11, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Current OS Version</div>
+                    <div style={{ fontSize: 14, fontWeight: 600, marginTop: 3, display: "flex", alignItems: "center", gap: 6 }}>
+                      {(() => {
+                        const curVer = selectedProduct.versions?.find(v => v.is_current) || selectedProduct.versions?.[0];
+                        return (
+                          <>
+                            <span>{curVer?.version || "—"}</span>
+                            {curVer?.is_current && <span className="badge badge-blue" style={{ fontSize: 10, padding: "1px 6px" }}>Current</span>}
+                          </>
+                        );
+                      })()}
+                    </div>
                   </div>
                   <div>
                     <div style={{ fontSize: 11, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Product Family</div>
-                    <div style={{ fontSize: 13, fontWeight: 500, marginTop: 2 }}>{selectedProduct.product_family || "—"}</div>
+                    <div style={{ fontSize: 14, fontWeight: 500, marginTop: 3 }}>{selectedProduct.product_family || "—"}</div>
                   </div>
                   <div>
-                    <div style={{ fontSize: 11, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Versions</div>
-                    <div style={{ fontSize: 13, fontWeight: 500, marginTop: 2 }}>{selectedProduct.versions?.length || 0}</div>
+                    <div style={{ fontSize: 11, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Total Versions</div>
+                    <div style={{ fontSize: 14, fontWeight: 600, marginTop: 3 }}>{selectedProduct.versions?.length || 0}</div>
                   </div>
                 </div>
               </div>
@@ -374,7 +498,7 @@ export default function ProductsPage() {
               </div>
               <div className="table-wrap">
                 <table>
-                  <thead><tr><th>Version</th><th>Status</th><th>Current</th><th>Values</th><th>Action</th></tr></thead>
+                  <thead><tr><th>Version</th><th>Status</th><th>Current</th><th>Values</th><th style={{ textAlign: "right" }}>Actions</th></tr></thead>
                   <tbody>
                     {(selectedProduct.versions || []).map(v => (
                       <tr key={v.id} style={{ background: selectedVersionId === v.id ? "var(--primary-light)" : undefined }}>
@@ -383,12 +507,27 @@ export default function ProductsPage() {
                         <td>{v.is_current ? <span className="badge badge-blue">Current</span> : "—"}</td>
                         <td>{v.product_values?.length || 0} values</td>
                         <td>
-                          <button
-                            className="btn btn-secondary btn-sm"
-                            onClick={() => { setSelectedVersionId(v.id); }}
-                          >
-                            Select Version
-                          </button>
+                          <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+                            <button
+                              className="btn btn-secondary btn-sm"
+                              onClick={() => {
+                                versionForm.reset({
+                                  version: v.version,
+                                  support_status: v.support_status,
+                                  is_current: v.is_current,
+                                });
+                                setShowVersionModal({ open: true, productId: selectedProduct.id, versionToEdit: v });
+                              }}
+                            >
+                              <Edit2 size={12} /> Edit
+                            </button>
+                            <button
+                              className="btn btn-secondary btn-sm"
+                              onClick={() => { setSelectedVersionId(v.id); }}
+                            >
+                              {selectedVersionId === v.id ? "Selected" : "Select"}
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     ))}
@@ -424,28 +563,43 @@ export default function ProductsPage() {
               )}
             </div>
 
-            {/* Dedicated Threat Intelligence & Vulnerabilities Card */}
+            {/* Dedicated Threat Intelligence Card — Spec §25 Architecture */}
             {selectedVersionId && threatChar && (
               <div className="card">
                 <div className="card-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                   <div>
                     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                      <div className="card-title">Threat Intelligence & Vulnerabilities</div>
-                      <span className="badge badge-blue">Risk Model</span>
+                      <div className="card-title">Threat Intelligence</div>
+                      <span className="badge badge-blue">TI Module</span>
+                      {tiDataStatus === "COMPLETE" && <span className="badge badge-green">Complete</span>}
+                      {tiDataStatus === "PARTIAL"  && <span className="badge badge-yellow">Partial</span>}
+                      {tiDataStatus === "UNKNOWN"  && <span className="badge badge-red">Unknown</span>}
+                      {tiDataStatus === "STALE"    && <span className="badge badge-yellow">Stale</span>}
                     </div>
                     <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>
-                      Recorded vulnerability counts across severity tiers and active exploitation for this device version.
+                      Pre-calculated threat score from the Threat Intelligence module. CVE counts shown as audit metadata only.
                     </div>
                   </div>
                   <button
                     className="btn btn-secondary btn-sm"
                     onClick={() => {
                       setThreatForm({
+                        threat_score:        String(tiThreatScore ?? 0),
+                        raw_risk:            String(tiRawRisk    ?? 0),
+                        policy_risk:         String(tiPolicyRisk ?? 0),
+                        risk_band:           tiRiskBand   || "UNKNOWN",
+                        data_status:         tiDataStatus || "COMPLETE",
+                        risk_policy_version: tiPolicyVer  || "1.0",
                         critical: String(critCount),
-                        high: String(highCount),
-                        medium: String(medCount),
-                        low: String(lowCount),
-                        kev: String(kevCount),
+                        high:     String(highCount),
+                        medium:   String(medCount),
+                        low:      String(lowCount),
+                        max_epss: String(maxEpss ?? 0),
+                        weaponized_count: String(weaponizedCount),
+                        kev:      String(kevCount),
+                        patched_count: String(patchedCount),
+                        unpatched_count: String(unpatchedCount),
+                        patch_status: patchStatus,
                       });
                       setShowThreatModal(true);
                     }}
@@ -453,88 +607,216 @@ export default function ProductsPage() {
                     <Edit2 size={13} /> Edit Threat Intel
                   </button>
                 </div>
+
                 <div className="card-body stack" style={{ gap: 16 }}>
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: 10 }}>
-                    {/* Critical CVEs */}
+
+                  {/* ── Row 1: Threat Score (authoritative) + metadata ── */}
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
+
+                    {/* Threat Score — the single value the Ranking Engine uses */}
                     <div style={{
-                      padding: "14px 16px", borderRadius: 8,
-                      background: critCount > 0 ? "rgba(220, 38, 38, 0.06)" : "var(--bg-subtle)",
-                      border: `1px solid ${critCount > 0 ? "rgba(220, 38, 38, 0.3)" : "var(--border)"}`,
-                      display: "flex", flexDirection: "column", gap: 2,
+                      padding: "18px 20px", borderRadius: 10,
+                      background: tiThreatScore === null
+                        ? "var(--bg-subtle)"
+                        : tiThreatScore >= 70 ? "rgba(34, 197, 94, 0.07)"
+                        : tiThreatScore >= 40 ? "rgba(245, 158, 11, 0.07)"
+                        : "rgba(220, 38, 38, 0.07)",
+                      border: `1px solid ${
+                        tiThreatScore === null ? "var(--border)"
+                        : tiThreatScore >= 70 ? "rgba(34, 197, 94, 0.35)"
+                        : tiThreatScore >= 40 ? "rgba(245, 158, 11, 0.35)"
+                        : "rgba(220, 38, 38, 0.35)"
+                      }`,
+                      display: "flex", flexDirection: "column", gap: 4,
                     }}>
-                      <div style={{ fontSize: 11, fontWeight: 600, color: "var(--muted)", textTransform: "uppercase" }}>Critical (CVSS 9+)</div>
-                      <div style={{ fontSize: 24, fontWeight: 700, color: critCount > 0 ? "var(--danger)" : "var(--text)" }}>{critCount}</div>
-                      <div style={{ fontSize: 10, color: "var(--muted)" }}>10 Risk Pts each</div>
+                      <div style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                        Threat Score
+                      </div>
+                      <div style={{
+                        fontSize: 36, fontWeight: 800, lineHeight: 1,
+                        color: tiThreatScore === null ? "var(--muted)"
+                          : tiThreatScore >= 70 ? "var(--success)"
+                          : tiThreatScore >= 40 ? "var(--warning)"
+                          : "var(--danger)",
+                      }}>
+                        {tiThreatScore !== null ? tiThreatScore.toFixed(1) : "—"}
+                        <span style={{ fontSize: 14, fontWeight: 500, color: "var(--muted)", marginLeft: 4 }}>/100</span>
+                      </div>
+                      <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>
+                        Used directly by Ranking Engine
+                      </div>
                     </div>
 
-                    {/* High CVEs */}
+                    {/* Raw Risk + Policy Risk */}
                     <div style={{
-                      padding: "14px 16px", borderRadius: 8,
-                      background: highCount > 0 ? "rgba(245, 158, 11, 0.06)" : "var(--bg-subtle)",
-                      border: `1px solid ${highCount > 0 ? "rgba(245, 158, 11, 0.3)" : "var(--border)"}`,
-                      display: "flex", flexDirection: "column", gap: 2,
-                    }}>
-                      <div style={{ fontSize: 11, fontWeight: 600, color: "var(--muted)", textTransform: "uppercase" }}>High (CVSS 7-8.9)</div>
-                      <div style={{ fontSize: 24, fontWeight: 700, color: highCount > 0 ? "var(--warning)" : "var(--text)" }}>{highCount}</div>
-                      <div style={{ fontSize: 10, color: "var(--muted)" }}>6 Risk Pts each</div>
-                    </div>
-
-                    {/* Medium CVEs */}
-                    <div style={{
-                      padding: "14px 16px", borderRadius: 8,
+                      padding: "14px 16px", borderRadius: 10,
                       background: "var(--bg-subtle)", border: "1px solid var(--border)",
-                      display: "flex", flexDirection: "column", gap: 2,
+                      display: "flex", flexDirection: "column", gap: 8,
                     }}>
-                      <div style={{ fontSize: 11, fontWeight: 600, color: "var(--muted)", textTransform: "uppercase" }}>Medium (CVSS 4-6.9)</div>
-                      <div style={{ fontSize: 24, fontWeight: 700, color: "var(--text)" }}>{medCount}</div>
-                      <div style={{ fontSize: 10, color: "var(--muted)" }}>3 Risk Pts each</div>
+                      <div style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.05em" }}>Risk Analysis</div>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                          <span style={{ fontSize: 12, color: "var(--muted)" }}>Raw Risk</span>
+                          <span style={{ fontSize: 14, fontWeight: 600, color: "var(--text)" }}>{tiRawRisk !== null ? tiRawRisk.toFixed(1) : "—"}</span>
+                        </div>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                          <span style={{ fontSize: 12, color: "var(--muted)" }}>Policy Risk</span>
+                          <span style={{ fontSize: 14, fontWeight: 600, color: "var(--text)" }}>{tiPolicyRisk !== null ? tiPolicyRisk.toFixed(1) : "—"}</span>
+                        </div>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                          <span style={{ fontSize: 12, color: "var(--muted)" }}>Risk Band</span>
+                          <span style={{
+                            fontSize: 12, fontWeight: 700, padding: "2px 8px", borderRadius: 4,
+                            background: tiRiskBand === "CRITICAL" ? "rgba(220,38,38,0.12)"
+                              : tiRiskBand === "HIGH"     ? "rgba(245,158,11,0.12)"
+                              : tiRiskBand === "MEDIUM"   ? "rgba(251,191,36,0.12)"
+                              : tiRiskBand === "LOW"      ? "rgba(34,197,94,0.12)" : "var(--bg-subtle)",
+                            color: tiRiskBand === "CRITICAL" ? "var(--danger)"
+                              : tiRiskBand === "HIGH"     ? "var(--warning)"
+                              : tiRiskBand === "MEDIUM"   ? "#d97706"
+                              : tiRiskBand === "LOW"      ? "var(--success)" : "var(--muted)",
+                          }}>{tiRiskBand || "—"}</span>
+                        </div>
+                      </div>
                     </div>
 
-                    {/* Low CVEs */}
+                    {/* Data provenance */}
                     <div style={{
-                      padding: "14px 16px", borderRadius: 8,
+                      padding: "14px 16px", borderRadius: 10,
                       background: "var(--bg-subtle)", border: "1px solid var(--border)",
-                      display: "flex", flexDirection: "column", gap: 2,
+                      display: "flex", flexDirection: "column", gap: 8,
                     }}>
-                      <div style={{ fontSize: 11, fontWeight: 600, color: "var(--muted)", textTransform: "uppercase" }}>Low (CVSS 0.1-3.9)</div>
-                      <div style={{ fontSize: 24, fontWeight: 700, color: "var(--text)" }}>{lowCount}</div>
-                      <div style={{ fontSize: 10, color: "var(--muted)" }}>1 Risk Pt each</div>
-                    </div>
-
-                    {/* CISA KEV Exploits */}
-                    <div style={{
-                      padding: "14px 16px", borderRadius: 8,
-                      background: kevCount > 0 ? "rgba(220, 38, 38, 0.1)" : "var(--bg-subtle)",
-                      border: `1px solid ${kevCount > 0 ? "rgba(220, 38, 38, 0.4)" : "var(--border)"}`,
-                      display: "flex", flexDirection: "column", gap: 2,
-                    }}>
-                      <div style={{ fontSize: 11, fontWeight: 600, color: "var(--muted)", textTransform: "uppercase" }}>CISA KEV Exploits</div>
-                      <div style={{ fontSize: 24, fontWeight: 700, color: kevCount > 0 ? "var(--danger)" : "var(--text)" }}>{kevCount}</div>
-                      <div style={{ fontSize: 10, color: "var(--muted)" }}>+20 Risk Pts each</div>
+                      <div style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.05em" }}>Data Provenance</div>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                          <span style={{ fontSize: 12, color: "var(--muted)" }}>Status</span>
+                          <span style={{ fontSize: 12, fontWeight: 600, color: tiDataStatus === "COMPLETE" ? "var(--success)" : tiDataStatus === "UNKNOWN" ? "var(--danger)" : "var(--warning)" }}>{tiDataStatus}</span>
+                        </div>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                          <span style={{ fontSize: 12, color: "var(--muted)" }}>Policy Ver.</span>
+                          <span style={{ fontSize: 12, fontWeight: 600, color: "var(--text)" }}>{tiPolicyVer || "—"}</span>
+                        </div>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                          <span style={{ fontSize: 12, color: "var(--muted)" }}>Calculated</span>
+                          <span style={{ fontSize: 11, color: "var(--muted)" }}>
+                            {tiCalcAt ? new Date(tiCalcAt).toLocaleDateString() : "—"}
+                          </span>
+                        </div>
+                      </div>
                     </div>
                   </div>
 
-                  {/* Calculated Risk Points Strip */}
-                  <div style={{
-                    padding: "14px 18px", borderRadius: 8, background: "var(--bg-subtle)",
-                    border: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 16,
-                  }}>
-                    <div>
-                      <div style={{ fontSize: 12, color: "var(--muted)" }}>Calculated Total Risk Points</div>
-                      <div style={{ fontSize: 20, fontWeight: 700, color: totalRiskPoints > 60 ? "var(--danger)" : totalRiskPoints > 25 ? "var(--warning)" : "var(--success)", marginTop: 2 }}>
-                        {totalRiskPoints} Risk Points
-                        <span style={{ fontSize: 12, fontWeight: 400, color: "var(--muted)", marginLeft: 8 }}>
-                          (Lower is better)
-                        </span>
-                      </div>
+                  {/* ── Row 2: The 4 Core Threat Intelligence Pillars ── */}
+                  <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                      Threat Intelligence Breakdown (4 Pillars)
                     </div>
-                    <div style={{ fontSize: 12, color: "var(--muted)", maxWidth: 360, textAlign: "right" }}>
-                      Risk formula: (2×10) + (4×6) + (7×3) + (10×1) + (1×20)
-                      <div style={{ marginTop: 2, fontWeight: 500, color: "var(--text)" }}>
-                        Normalized into 0–100 Threat Score during comparison
+
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12 }}>
+                      
+                      {/* Pillar 1: Severity (CVSS Breakdown) */}
+                      <div style={{
+                        padding: "14px 16px", borderRadius: 8, background: "var(--bg-subtle)",
+                        border: "1px solid var(--border)", display: "flex", flexDirection: "column", gap: 8,
+                      }}>
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                          <span style={{ fontSize: 12, fontWeight: 600, color: "var(--text)" }}>1. Severity (CVSS)</span>
+                          <span className="badge badge-blue">CVSS Tiers</span>
+                        </div>
+                        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 4, textAlign: "center" }}>
+                          <div style={{ padding: "6px 4px", borderRadius: 4, background: critCount > 0 ? "rgba(220,38,38,0.08)" : "transparent", border: critCount > 0 ? "1px solid rgba(220,38,38,0.3)" : "1px solid var(--border)" }}>
+                            <div style={{ fontSize: 9, color: "var(--danger)", fontWeight: 700 }}>CRIT</div>
+                            <div style={{ fontSize: 16, fontWeight: 700, color: critCount > 0 ? "var(--danger)" : "var(--text)" }}>{critCount}</div>
+                          </div>
+                          <div style={{ padding: "6px 4px", borderRadius: 4, background: highCount > 0 ? "rgba(245,158,11,0.08)" : "transparent", border: highCount > 0 ? "1px solid rgba(245,158,11,0.3)" : "1px solid var(--border)" }}>
+                            <div style={{ fontSize: 9, color: "var(--warning)", fontWeight: 700 }}>HIGH</div>
+                            <div style={{ fontSize: 16, fontWeight: 700, color: highCount > 0 ? "var(--warning)" : "var(--text)" }}>{highCount}</div>
+                          </div>
+                          <div style={{ padding: "6px 4px", borderRadius: 4, border: "1px solid var(--border)" }}>
+                            <div style={{ fontSize: 9, color: "var(--muted)", fontWeight: 700 }}>MED</div>
+                            <div style={{ fontSize: 16, fontWeight: 700, color: "var(--text)" }}>{medCount}</div>
+                          </div>
+                          <div style={{ padding: "6px 4px", borderRadius: 4, border: "1px solid var(--border)" }}>
+                            <div style={{ fontSize: 9, color: "var(--muted)", fontWeight: 700 }}>LOW</div>
+                            <div style={{ fontSize: 16, fontWeight: 700, color: "var(--text)" }}>{lowCount}</div>
+                          </div>
+                        </div>
                       </div>
+
+                      {/* Pillar 2: Exploitability (EPSS & Weaponization) */}
+                      <div style={{
+                        padding: "14px 16px", borderRadius: 8, background: "var(--bg-subtle)",
+                        border: "1px solid var(--border)", display: "flex", flexDirection: "column", gap: 8,
+                      }}>
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                          <span style={{ fontSize: 12, fontWeight: 600, color: "var(--text)" }}>2. Exploitability</span>
+                          <span className={`badge ${maxEpss && maxEpss > 50 ? "badge-red" : maxEpss && maxEpss > 15 ? "badge-yellow" : "badge-green"}`}>
+                            EPSS {maxEpss != null ? `${maxEpss}%` : "N/A"}
+                          </span>
+                        </div>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 4 }}>
+                          <span style={{ fontSize: 12, color: "var(--muted)" }}>Max EPSS Score</span>
+                          <span style={{ fontSize: 14, fontWeight: 700, color: maxEpss && maxEpss > 50 ? "var(--danger)" : "var(--text)" }}>
+                            {maxEpss != null ? `${maxEpss.toFixed(1)}%` : "0.0%"}
+                          </span>
+                        </div>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                          <span style={{ fontSize: 12, color: "var(--muted)" }}>Weaponized PoC</span>
+                          <span style={{ fontSize: 13, fontWeight: 600, color: weaponizedCount > 0 ? "var(--warning)" : "var(--success)" }}>
+                            {weaponizedCount > 0 ? `${weaponizedCount} Exploit${weaponizedCount > 1 ? "s" : ""}` : "None"}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Pillar 3: Active Exploitation (CISA KEV) */}
+                      <div style={{
+                        padding: "14px 16px", borderRadius: 8,
+                        background: kevCount > 0 ? "rgba(220,38,38,0.06)" : "var(--bg-subtle)",
+                        border: `1px solid ${kevCount > 0 ? "rgba(220,38,38,0.3)" : "var(--border)"}`,
+                        display: "flex", flexDirection: "column", gap: 8,
+                      }}>
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                          <span style={{ fontSize: 12, fontWeight: 600, color: "var(--text)" }}>3. Active KEV</span>
+                          <span className={`badge ${kevCount > 0 ? "badge-red" : "badge-green"}`}>
+                            {kevCount > 0 ? "CISA KEV Active" : "No KEV"}
+                          </span>
+                        </div>
+                        <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 4 }}>
+                          <div style={{ fontSize: 26, fontWeight: 800, color: kevCount > 0 ? "var(--danger)" : "var(--success)" }}>
+                            {kevCount}
+                          </div>
+                          <div style={{ fontSize: 11, color: "var(--muted)", lineHeight: 1.3 }}>
+                            {kevCount > 0 ? "Actively exploited in the wild (Known Exploited Vulnerability)" : "No known in-the-wild exploitation cataloged"}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Pillar 4: Patch Status & Remediation */}
+                      <div style={{
+                        padding: "14px 16px", borderRadius: 8, background: "var(--bg-subtle)",
+                        border: "1px solid var(--border)", display: "flex", flexDirection: "column", gap: 8,
+                      }}>
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                          <span style={{ fontSize: 12, fontWeight: 600, color: "var(--text)" }}>4. Patch Status</span>
+                          <span className={`badge ${unpatchedCount > 0 ? "badge-red" : "badge-green"}`}>
+                            {unpatchedCount > 0 ? `${unpatchedCount} Unpatched` : "100% Patched"}
+                          </span>
+                        </div>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 4 }}>
+                          <span style={{ fontSize: 12, color: "var(--muted)" }}>Fixed / Patched</span>
+                          <span style={{ fontSize: 13, fontWeight: 600, color: "var(--success)" }}>{patchedCount} CVEs Fixed</span>
+                        </div>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                          <span style={{ fontSize: 12, color: "var(--muted)" }}>Unpatched Zero-Day</span>
+                          <span style={{ fontSize: 13, fontWeight: 700, color: unpatchedCount > 0 ? "var(--danger)" : "var(--muted)" }}>
+                            {unpatchedCount > 0 ? `${unpatchedCount} Zero-Day` : "0 (None)"}
+                          </span>
+                        </div>
+                      </div>
+
                     </div>
                   </div>
+
                 </div>
               </div>
             )}
@@ -737,7 +1019,7 @@ export default function ProductsPage() {
       {/* ── Product Modal (Create / Edit) ─────────────────────────────────────── */}
       {showProductModal.open && (
         <div className="modal-backdrop" onClick={() => setShowProductModal({ open: false })}>
-          <div className="modal" onClick={e => e.stopPropagation()}>
+          <div className="modal" style={{ maxWidth: 560 }} onClick={e => e.stopPropagation()}>
             <div className="modal-header">
               <div className="modal-title">{showProductModal.product ? "Edit Product" : "Add Product"}</div>
               <button className="btn btn-ghost btn-sm" onClick={() => setShowProductModal({ open: false })}><X size={16} /></button>
@@ -760,12 +1042,34 @@ export default function ProductsPage() {
                     </select>
                   </div>
                 </div>
-                <div className="form-group"><label className="form-label">Product Name *</label><input className="form-control" placeholder="FortiGate 1000F" {...productForm.register("name")} /></div>
-                <div className="grid-2">
-                  <div className="form-group"><label className="form-label">Model</label><input className="form-control" {...productForm.register("model")} /></div>
-                  <div className="form-group"><label className="form-label">Product Family</label><input className="form-control" {...productForm.register("product_family")} /></div>
+
+                <div className="form-group">
+                  <label className="form-label">Product Name *</label>
+                  <input className="form-control" placeholder="e.g. FortiGate 1000F" {...productForm.register("name")} />
                 </div>
-                <div className="form-group"><label className="form-label">Description</label><textarea className="form-control" {...productForm.register("description")} /></div>
+
+                <div className="grid-2">
+                  <div className="form-group">
+                    <label className="form-label">Hardware Model *</label>
+                    <input className="form-control" placeholder="e.g. FortiGate 1000F / PA-X Series" {...productForm.register("model")} />
+                    <div className="form-hint">Physical appliance or model designation</div>
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">Current OS Version *</label>
+                    <input className="form-control" placeholder="e.g. FortiOS 7.4.x / PAN-OS 11.x" {...productForm.register("current_os_version")} />
+                    <div className="form-hint">Firmware / operating system release</div>
+                  </div>
+                </div>
+
+                <div className="form-group">
+                  <label className="form-label">Product Family</label>
+                  <input className="form-control" placeholder="e.g. Enterprise Next-Generation Firewall (NGFW)" {...productForm.register("product_family")} />
+                </div>
+
+                <div className="form-group">
+                  <label className="form-label">Description</label>
+                  <textarea className="form-control" placeholder="Optional notes, specifications, or deployment architecture…" {...productForm.register("description")} />
+                </div>
               </div>
               <div className="modal-footer">
                 <button type="button" className="btn btn-secondary" onClick={() => setShowProductModal({ open: false })}>Cancel</button>
@@ -778,17 +1082,20 @@ export default function ProductsPage() {
         </div>
       )}
 
-      {/* ── Version Modal ─────────────────────────────────────────────────────── */}
+      {/* ── Version Modal (Add / Edit Version) ─────────────────────────────────── */}
       {showVersionModal.open && (
         <div className="modal-backdrop" onClick={() => setShowVersionModal({ open: false })}>
           <div className="modal" onClick={e => e.stopPropagation()}>
             <div className="modal-header">
-              <div className="modal-title">Add Version</div>
+              <div className="modal-title">{showVersionModal.versionToEdit ? "Edit Version" : "Add Version"}</div>
               <button className="btn btn-ghost btn-sm" onClick={() => setShowVersionModal({ open: false })}><X size={16} /></button>
             </div>
-            <form onSubmit={versionForm.handleSubmit((d) => createVersion.mutate(d as unknown as VersionForm))}>
+            <form onSubmit={versionForm.handleSubmit((d) => saveVersion.mutate(d as unknown as VersionForm))}>
               <div className="modal-body stack">
-                <div className="form-group"><label className="form-label">Version *</label><input className="form-control" placeholder="7.4.x" {...versionForm.register("version")} /></div>
+                <div className="form-group">
+                  <label className="form-label">OS / Firmware Version *</label>
+                  <input className="form-control" placeholder="e.g. FortiOS 7.4.4 / PAN-OS 11.1" {...versionForm.register("version")} />
+                </div>
                 <div className="form-group">
                   <label className="form-label">Support Status</label>
                   <select className="form-control" {...versionForm.register("support_status")}>
@@ -805,7 +1112,9 @@ export default function ProductsPage() {
               </div>
               <div className="modal-footer">
                 <button type="button" className="btn btn-secondary" onClick={() => setShowVersionModal({ open: false })}>Cancel</button>
-                <button type="submit" className="btn btn-primary" disabled={createVersion.isPending}>{createVersion.isPending ? "Adding…" : "Add Version"}</button>
+                <button type="submit" className="btn btn-primary" disabled={saveVersion.isPending}>
+                  {saveVersion.isPending ? "Saving…" : showVersionModal.versionToEdit ? "Update Version" : "Add Version"}
+                </button>
               </div>
             </form>
           </div>
@@ -840,98 +1149,171 @@ export default function ProductsPage() {
         </div>
       )}
 
-      {/* ── Modal: Dedicated Edit Threat Intelligence ────────────────────────── */}
+      {/* ── Modal: Edit Threat Intelligence (Spec §25 — TI Module response format) ── */}
       {showThreatModal && (
         <div className="modal-backdrop" onClick={() => setShowThreatModal(false)}>
-          <div className="modal" style={{ maxWidth: 540 }} onClick={e => e.stopPropagation()}>
+          <div className="modal" style={{ maxWidth: 580 }} onClick={e => e.stopPropagation()}>
             <div className="modal-header">
               <div>
-                <div className="modal-title">Edit Threat Intelligence</div>
+                <div className="modal-title">Edit Threat Intelligence Data</div>
                 <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>
-                  Set CVE vulnerability counts for device version #{selectedVersionId}
+                  Enter the Threat Intelligence module output for version #{selectedVersionId}.
+                  The Ranking Engine reads <strong>Threat Score</strong> directly — it does not recalculate CVE risk.
                 </div>
               </div>
               <button className="btn btn-ghost btn-sm" onClick={() => setShowThreatModal(false)}><X size={16} /></button>
             </div>
             <div className="modal-body stack">
+
+              {/* Architecture info banner */}
               <div className="alert alert-info" style={{ fontSize: 12 }}>
-                <strong>Risk Points Formula (Lower points = Better security posture):</strong>
-                <div style={{ marginTop: 4 }}>
-                  Total Risk Points = (Crit × 10) + (High × 6) + (Med × 3) + (Low × 1) + (KEV × 20)
+                <strong>Spec §25 Architecture:</strong> The TI module calculates CVE risk internally and provides a final Threat Score (0–100). The Ranking Engine uses only this score.
+                <div style={{ marginTop: 4, color: "var(--muted)" }}>Higher Threat Score = safer product. (Threat Score = 100 − Policy Risk)</div>
+              </div>
+
+              {/* ── Threat Score (authoritative) ── */}
+              <div style={{ padding: "16px", borderRadius: 8, background: "var(--bg-subtle)", border: "2px solid var(--primary)" }}>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="form-label" style={{ color: "var(--primary)", fontWeight: 700 }}>
+                    Threat Score (0–100) — Used by Ranking Engine *
+                  </label>
+                  <input
+                    type="number" min="0" max="100" step="0.1" className="form-control"
+                    placeholder="e.g. 75.0"
+                    value={threatForm.threat_score}
+                    onChange={e => setThreatForm(f => ({ ...f, threat_score: e.target.value }))}
+                  />
+                  <div className="form-hint">0 = most vulnerable, 100 = no risk. Pre-calculated by TI module via: 100 − min(raw_risk, 100)</div>
                 </div>
               </div>
 
+              {/* ── Risk breakdown metadata ── */}
+              <div style={{ fontSize: 12, fontWeight: 600, color: "var(--muted)", textTransform: "uppercase", marginTop: 4 }}>Risk Audit Metadata (from TI Module)</div>
               <div className="grid-2">
                 <div className="form-group">
-                  <label className="form-label">Critical CVEs (CVSS 9+)</label>
+                  <label className="form-label">Raw Risk Points</label>
                   <input
-                    type="number" min="0" className="form-control"
-                    value={threatForm.critical}
-                    onChange={e => setThreatForm(f => ({ ...f, critical: e.target.value }))}
+                    type="number" min="0" step="0.1" className="form-control"
+                    placeholder="e.g. 95.0"
+                    value={threatForm.raw_risk}
+                    onChange={e => setThreatForm(f => ({ ...f, raw_risk: e.target.value }))}
                   />
-                  <div className="form-hint" style={{ color: "var(--danger)" }}>10 Risk Points each</div>
+                  <div className="form-hint">Sum before policy cap</div>
                 </div>
-
                 <div className="form-group">
-                  <label className="form-label">High CVEs (CVSS 7-8.9)</label>
+                  <label className="form-label">Policy Risk (capped at 100)</label>
                   <input
-                    type="number" min="0" className="form-control"
-                    value={threatForm.high}
-                    onChange={e => setThreatForm(f => ({ ...f, high: e.target.value }))}
+                    type="number" min="0" max="100" step="0.1" className="form-control"
+                    placeholder="e.g. 95.0"
+                    value={threatForm.policy_risk}
+                    onChange={e => setThreatForm(f => ({ ...f, policy_risk: e.target.value }))}
                   />
-                  <div className="form-hint" style={{ color: "var(--warning)" }}>6 Risk Points each</div>
+                  <div className="form-hint">min(raw_risk, 100)</div>
                 </div>
               </div>
-
               <div className="grid-2">
                 <div className="form-group">
-                  <label className="form-label">Medium CVEs (CVSS 4-6.9)</label>
-                  <input
-                    type="number" min="0" className="form-control"
-                    value={threatForm.medium}
-                    onChange={e => setThreatForm(f => ({ ...f, medium: e.target.value }))}
-                  />
-                  <div className="form-hint">3 Risk Points each</div>
+                  <label className="form-label">Risk Band</label>
+                  <select className="form-control" value={threatForm.risk_band} onChange={e => setThreatForm(f => ({ ...f, risk_band: e.target.value }))}>
+                    <option value="LOW">LOW</option>
+                    <option value="MEDIUM">MEDIUM</option>
+                    <option value="HIGH">HIGH</option>
+                    <option value="CRITICAL">CRITICAL</option>
+                    <option value="UNKNOWN">UNKNOWN</option>
+                  </select>
                 </div>
-
                 <div className="form-group">
-                  <label className="form-label">Low CVEs (CVSS 0.1-3.9)</label>
-                  <input
-                    type="number" min="0" className="form-control"
-                    value={threatForm.low}
-                    onChange={e => setThreatForm(f => ({ ...f, low: e.target.value }))}
-                  />
-                  <div className="form-hint">1 Risk Point each</div>
+                  <label className="form-label">Data Status</label>
+                  <select className="form-control" value={threatForm.data_status} onChange={e => setThreatForm(f => ({ ...f, data_status: e.target.value }))}>
+                    <option value="COMPLETE">COMPLETE</option>
+                    <option value="PARTIAL">PARTIAL</option>
+                    <option value="UNKNOWN">UNKNOWN</option>
+                    <option value="STALE">STALE</option>
+                  </select>
                 </div>
               </div>
 
-              <div className="form-group">
-                <label className="form-label">CISA KEV Exploits (Actively Exploited in the Wild)</label>
-                <input
-                  type="number" min="0" className="form-control"
-                  value={threatForm.kev}
-                  onChange={e => setThreatForm(f => ({ ...f, kev: e.target.value }))}
-                />
-                <div className="form-hint" style={{ color: "var(--danger)" }}>+20 Risk Points modifier each</div>
+              {/* ── 4 Pillars Metadata ── */}
+              <div style={{ fontSize: 12, fontWeight: 700, color: "var(--text)", textTransform: "uppercase", marginTop: 6 }}>
+                Threat Intelligence 4 Pillars Data
               </div>
 
-              {/* Live Calculation Preview */}
-              {(() => {
-                const c = parseInt(threatForm.critical || "0") || 0;
-                const h = parseInt(threatForm.high || "0") || 0;
-                const m = parseInt(threatForm.medium || "0") || 0;
-                const l = parseInt(threatForm.low || "0") || 0;
-                const k = parseInt(threatForm.kev || "0") || 0;
-                const pts = (c * 10) + (h * 6) + (m * 3) + (l * 1) + (k * 20);
-                return (
-                  <div style={{ padding: 14, borderRadius: 6, background: "var(--bg-subtle)", border: "1px solid var(--border)" }}>
-                    <div style={{ fontSize: 12, color: "var(--muted)" }}>Computed Risk Points:</div>
-                    <div style={{ fontSize: 20, fontWeight: 700, color: pts > 50 ? "var(--danger)" : pts > 20 ? "var(--warning)" : "var(--success)", marginTop: 2 }}>
-                      {pts} Total Risk Points
-                    </div>
+              {/* 1. Severity (CVSS) */}
+              <div>
+                <label className="form-label" style={{ fontWeight: 600 }}>1. Severity Counts (CVSS)</label>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8 }}>
+                  <div>
+                    <label className="form-label" style={{ fontSize: 11, color: "var(--danger)" }}>Crit (9+)</label>
+                    <input type="number" min="0" className="form-control" value={threatForm.critical} onChange={e => setThreatForm(f => ({ ...f, critical: e.target.value }))} />
                   </div>
-                );
-              })()}
+                  <div>
+                    <label className="form-label" style={{ fontSize: 11, color: "var(--warning)" }}>High (7-8.9)</label>
+                    <input type="number" min="0" className="form-control" value={threatForm.high} onChange={e => setThreatForm(f => ({ ...f, high: e.target.value }))} />
+                  </div>
+                  <div>
+                    <label className="form-label" style={{ fontSize: 11 }}>Med (4-6.9)</label>
+                    <input type="number" min="0" className="form-control" value={threatForm.medium} onChange={e => setThreatForm(f => ({ ...f, medium: e.target.value }))} />
+                  </div>
+                  <div>
+                    <label className="form-label" style={{ fontSize: 11 }}>Low (0.1-3.9)</label>
+                    <input type="number" min="0" className="form-control" value={threatForm.low} onChange={e => setThreatForm(f => ({ ...f, low: e.target.value }))} />
+                  </div>
+                </div>
+              </div>
+
+              {/* 2. Exploitability (EPSS & Weaponization) */}
+              <div className="grid-2">
+                <div className="form-group">
+                  <label className="form-label" style={{ fontWeight: 600 }}>2. Max EPSS Score (%)</label>
+                  <input type="number" min="0" max="100" step="0.1" className="form-control" placeholder="e.g. 94.5" value={threatForm.max_epss} onChange={e => setThreatForm(f => ({ ...f, max_epss: e.target.value }))} />
+                  <div className="form-hint">Probability of exploitation in the wild (0-100%)</div>
+                </div>
+                <div className="form-group">
+                  <label className="form-label" style={{ fontWeight: 600 }}>Weaponized Exploit / PoC Count</label>
+                  <input type="number" min="0" className="form-control" placeholder="e.g. 2" value={threatForm.weaponized_count} onChange={e => setThreatForm(f => ({ ...f, weaponized_count: e.target.value }))} />
+                  <div className="form-hint">Publicly available exploit kits</div>
+                </div>
+              </div>
+
+              {/* 3. Active Exploitation (CISA KEV) */}
+              <div className="form-group">
+                <label className="form-label" style={{ fontWeight: 600, color: "var(--danger)" }}>3. CISA KEV Exploits Count (Active In-The-Wild)</label>
+                <input type="number" min="0" className="form-control" value={threatForm.kev} onChange={e => setThreatForm(f => ({ ...f, kev: e.target.value }))} />
+                <div className="form-hint">Vulnerabilities listed in CISA's Known Exploited Vulnerabilities catalog</div>
+              </div>
+
+              {/* 4. Patch Status & Remediation */}
+              <div className="grid-2">
+                <div className="form-group">
+                  <label className="form-label" style={{ fontWeight: 600 }}>4. Fixed / Patched Count</label>
+                  <input type="number" min="0" className="form-control" value={threatForm.patched_count} onChange={e => setThreatForm(f => ({ ...f, patched_count: e.target.value }))} />
+                  <div className="form-hint">Vulnerabilities with vendor patches</div>
+                </div>
+                <div className="form-group">
+                  <label className="form-label" style={{ fontWeight: 600 }}>Unpatched / Zero-Day Count</label>
+                  <input type="number" min="0" className="form-control" value={threatForm.unpatched_count} onChange={e => setThreatForm(f => ({ ...f, unpatched_count: e.target.value }))} />
+                  <div className="form-hint">No vendor fix available</div>
+                </div>
+              </div>
+
+              {/* Live preview */}
+              <div style={{ padding: 14, borderRadius: 6, background: "var(--bg-subtle)", border: "1px solid var(--border)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <div>
+                  <div style={{ fontSize: 12, color: "var(--muted)" }}>Threat Score to be saved:</div>
+                  <div style={{
+                    fontSize: 22, fontWeight: 800,
+                    color: parseFloat(threatForm.threat_score) >= 70 ? "var(--success)" : parseFloat(threatForm.threat_score) >= 40 ? "var(--warning)" : "var(--danger)",
+                    marginTop: 2,
+                  }}>
+                    {Math.min(100, Math.max(0, parseFloat(threatForm.threat_score) || 0)).toFixed(1)} / 100
+                  </div>
+                </div>
+                <div style={{ textAlign: "right" }}>
+                  <div style={{ fontSize: 11, color: "var(--muted)" }}>Risk Band</div>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: "var(--text)" }}>{threatForm.risk_band}</div>
+                </div>
+              </div>
+
             </div>
             <div className="modal-footer">
               <button className="btn btn-secondary" onClick={() => setShowThreatModal(false)}>Cancel</button>
