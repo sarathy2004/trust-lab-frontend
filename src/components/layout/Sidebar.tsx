@@ -17,7 +17,7 @@ const trustLabsNav = [
   { label: "Product Intelligence", href: "/trust-labs/products", icon: Package },
   { label: "Templates", href: "/trust-labs/templates", icon: FileText },
   { label: "Compare & Rank", href: "/trust-labs/comparisons", icon: GitCompare },
-  { label: "Monitoring", href: "/trust-labs/monitoring", icon: Activity },
+  { label: "Threat Intelligence", href: "/trust-labs/monitoring", icon: Activity },
   { label: "Reports", href: "/trust-labs/reports", icon: BarChart3 },
 ];
 

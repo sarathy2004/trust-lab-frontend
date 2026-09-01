@@ -78,6 +78,8 @@ export const productsApi = {
   update: (id: number, data: Partial<ProductCreate>) => request<Product>(`/products/${id}`, { method: "PUT", body: JSON.stringify(data) }),
   addVersion: (productId: number, data: ProductVersionCreate) =>
     request<ProductVersion>(`/products/${productId}/versions`, { method: "POST", body: JSON.stringify(data) }),
+  updateVersion: (versionId: number, data: Partial<ProductVersionCreate>) =>
+    request<ProductVersion>(`/products/versions/${versionId}`, { method: "PUT", body: JSON.stringify(data) }),
   addClassMapping: (productId: number, productClassId: number) =>
     request<void>(`/products/${productId}/class-mappings`, { method: "POST", body: JSON.stringify({ product_class_id: productClassId }) }),
   getClassMappings: (productId: number) => request<ClassMapping[]>(`/products/${productId}/class-mappings`),
@@ -91,6 +93,18 @@ export const productsApi = {
   addOptionValue: (versionId: number, data: ProductOptionValueCreate) =>
     request<ProductOptionValue>(`/products/versions/${versionId}/option-values`, { method: "POST", body: JSON.stringify(data) }),
   getOptionValues: (versionId: number) => request<ProductOptionValue[]>(`/products/versions/${versionId}/option-values`),
+};
+
+
+// ── Threat Intelligence ──────────────────────────────────────────────────────
+export const threatIntelApi = {
+  get: (versionId: number) => request<ThreatIntelResult>(`/threat-intel/${versionId}`),
+  fetch: (versionId: number) => request<ThreatIntelResult>(`/threat-intel/fetch/${versionId}`, { method: "POST" }),
+  fetchAll: () => request<ThreatIntelFetchAllItem[]>("/threat-intel/fetch-all", { method: "POST" }),
+  getSettings: () => request<ThreatIntelSettings>("/threat-intel/settings"),
+  updateSettings: (data: { nvd_api_key: string }) => request<ThreatIntelSettings>("/threat-intel/settings", { method: "PUT", body: JSON.stringify(data) }),
+  testApiKey: (data: { nvd_api_key?: string }) => request<{ success: boolean; message: string }>("/threat-intel/test-api-key", { method: "POST", body: JSON.stringify(data) }),
+  updateVulnerability: (id: number, data: { affected_status?: string; fixed_version?: string; analyst_notes?: string }) => request<ProductVulnerability>(`/threat-intel/vulnerabilities/${id}`, { method: "PUT", body: JSON.stringify(data) }),
 };
 
 
@@ -183,6 +197,41 @@ export interface ProductOptionValueCreate {
 }
 
 export interface ClassMapping { id: number; product_class_id: number; eligibility_status: string; }
+
+export interface Vulnerability {
+  id: number; cve_id: string; description?: string;
+  cvss_score?: number; cvss_vector?: string; cvss_source?: string;
+  epss_score?: number; is_kev: boolean; kev_date_added?: string; published_date?: string;
+}
+export interface ProductVulnerability {
+  id: number; product_version_id: number; vulnerability_id: number;
+  affected_status: "AFFECTED" | "PATCHED" | "MITIGATED" | "FALSE_POSITIVE" | "UNKNOWN";
+  correlation_confidence: "VERSION_CONFIRMED" | "PRODUCT_MATCH_ONLY";
+  fixed_version?: string;
+  analyst_notes?: string;
+  cve_risk?: number;
+  vulnerability: Vulnerability;
+}
+export interface ThreatIntelResult {
+  product_version_id: number;
+  threat_score: number; raw_risk: number; policy_risk: number;
+  risk_band: string; data_status: string; risk_policy_version: string; calculated_at: string;
+  critical: number; high: number; medium: number; low: number;
+  max_epss: number; weaponized_count: number; kev: number;
+  patched_count: number; unpatched_count: number; patch_status: string;
+  correlation_note?: string;
+  cves: ProductVulnerability[];
+}
+export interface ThreatIntelFetchAllItem {
+  product_version_id: number; product_name: string; success: boolean;
+  result?: ThreatIntelResult; error?: string;
+}
+export interface ThreatIntelSettings {
+  nvd_api_key_configured: boolean;
+  nvd_api_key_masked?: string;
+  rate_limit: string;
+  source: "DATABASE" | "ENV" | "NONE";
+}
 
 export interface ComparisonRun {
   id: number; ranking_template_id: number; product_class_id: number; asset_product_id?: number;

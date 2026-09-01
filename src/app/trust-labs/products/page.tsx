@@ -21,10 +21,11 @@ const vendorSchema = z.object({
 const productSchema = z.object({
   vendor_id: z.coerce.number().min(1, "Required"),
   category_id: z.coerce.number().min(1, "Required"),
-  name: z.string().min(1),
+  name: z.string().min(1, "Product Name is required"),
   model: z.string().optional(),
   product_family: z.string().optional(),
   description: z.string().optional(),
+  current_os_version: z.string().optional(),
 });
 
 const versionSchema = z.object({
@@ -41,7 +42,7 @@ export default function ProductsPage() {
   const qc = useQueryClient();
   const [showVendorModal, setShowVendorModal] = useState(false);
   const [showProductModal, setShowProductModal] = useState<{ open: boolean; product?: Product }>({ open: false });
-  const [showVersionModal, setShowVersionModal] = useState<{ open: boolean; productId?: number }>({ open: false });
+  const [showVersionModal, setShowVersionModal] = useState<{ open: boolean; productId?: number; versionToEdit?: ProductVersion }>({ open: false });
   const [showMappingModal, setShowMappingModal] = useState<{ open: boolean; productId?: number }>({ open: false });
   const [showValueModal, setShowValueModal] = useState<{ open: boolean; versionId?: number; productId?: number; valueToEdit?: ProductValue }>({ open: false });
   const [showCompositeModal, setShowCompositeModal] = useState<{ open: boolean; char?: Characteristic }>({ open: false });
@@ -107,19 +108,71 @@ export default function ProductsPage() {
 
   const productForm = useForm<ProductForm>({ resolver: zodResolver(productSchema) });
   const saveProduct = useMutation({
-    mutationFn: (d: ProductForm) => {
+    mutationFn: async (d: ProductForm) => {
+      const { current_os_version, ...productData } = d;
+      let prod: Product;
       if (showProductModal.product) {
-        return productsApi.update(showProductModal.product.id, d);
+        prod = await productsApi.update(showProductModal.product.id, productData);
+        if (current_os_version && current_os_version.trim()) {
+          const curVer = showProductModal.product.versions?.find(v => v.is_current) || showProductModal.product.versions?.[0];
+          if (curVer) {
+            try {
+              await productsApi.updateVersion(curVer.id, { version: current_os_version.trim() });
+            } catch {
+              await productsApi.addVersion(prod.id, { version: current_os_version.trim(), is_current: true, support_status: "ACTIVE" });
+            }
+          } else {
+            await productsApi.addVersion(prod.id, { version: current_os_version.trim(), is_current: true, support_status: "ACTIVE" });
+          }
+        }
+      } else {
+        prod = await productsApi.create(productData);
+        if (current_os_version && current_os_version.trim()) {
+          await productsApi.addVersion(prod.id, { version: current_os_version.trim(), is_current: true, support_status: "ACTIVE" });
+        }
       }
-      return productsApi.create(d);
+      const refreshed = await productsApi.get(prod.id);
+      return refreshed;
     },
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ["products"] }); setShowProductModal({ open: false }); productForm.reset(); },
+    onSuccess: (updatedProd) => {
+      qc.invalidateQueries({ queryKey: ["products"] });
+      setSelectedProduct(updatedProd);
+      const newCur = updatedProd.versions?.find(v => v.is_current) || updatedProd.versions?.[0];
+      if (newCur) setSelectedVersionId(newCur.id);
+      setShowProductModal({ open: false });
+      productForm.reset();
+    },
+    onError: (err: any) => {
+      alert("Failed to save product: " + (err?.message || "Unknown error"));
+    },
   });
 
   const versionForm = useForm<VersionForm>({ resolver: zodResolver(versionSchema) as any, defaultValues: { support_status: "ACTIVE", is_current: true } });
-  const createVersion = useMutation({
-    mutationFn: (d: VersionForm) => productsApi.addVersion(showVersionModal.productId!, d),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ["products"] }); setShowVersionModal({ open: false }); versionForm.reset(); },
+  const saveVersion = useMutation({
+    mutationFn: async (d: VersionForm) => {
+      if (showVersionModal.versionToEdit) {
+        try {
+          return await productsApi.updateVersion(showVersionModal.versionToEdit.id, d);
+        } catch {
+          return await productsApi.addVersion(showVersionModal.productId!, d);
+        }
+      }
+      return await productsApi.addVersion(showVersionModal.productId!, d);
+    },
+    onSuccess: async () => {
+      qc.invalidateQueries({ queryKey: ["products"] });
+      if (selectedProduct) {
+        const refreshed = await productsApi.get(selectedProduct.id);
+        setSelectedProduct(refreshed);
+        const newCur = refreshed.versions?.find(v => v.is_current) || refreshed.versions?.[0];
+        if (newCur) setSelectedVersionId(newCur.id);
+      }
+      setShowVersionModal({ open: false });
+      versionForm.reset();
+    },
+    onError: (err: any) => {
+      alert("Failed to save version: " + (err?.message || "Unknown error"));
+    },
   });
 
   const addMapping = useMutation({
@@ -370,13 +423,16 @@ export default function ProductsPage() {
             <div className="card">
               <div className="card-header">
                 <div>
-                  <div className="card-title">{selectedProduct.name}</div>
-                  <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>{selectedProduct.vendor?.name} — {selectedProduct.model}</div>
+                  <div className="card-title" style={{ fontSize: 18 }}>{selectedProduct.name}</div>
+                  <div style={{ fontSize: 13, color: "var(--muted)", marginTop: 2 }}>
+                    {selectedProduct.vendor?.name} · Model: <strong style={{ color: "var(--text)" }}>{selectedProduct.model || "—"}</strong>
+                  </div>
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                   <button
                     className="btn btn-secondary btn-sm"
                     onClick={() => {
+                      const curVer = selectedProduct.versions?.find(v => v.is_current) || selectedProduct.versions?.[0];
                       productForm.reset({
                         vendor_id: selectedProduct.vendor_id,
                         category_id: selectedProduct.category_id,
@@ -384,6 +440,7 @@ export default function ProductsPage() {
                         model: selectedProduct.model || "",
                         product_family: selectedProduct.product_family || "",
                         description: selectedProduct.description || "",
+                        current_os_version: curVer?.version || "",
                       });
                       setShowProductModal({ open: true, product: selectedProduct });
                     }}
@@ -396,18 +453,36 @@ export default function ProductsPage() {
                 </div>
               </div>
               <div className="card-body">
-                <div className="grid-3">
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 16 }}>
                   <div>
                     <div style={{ fontSize: 11, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Category</div>
-                    <div style={{ fontSize: 13, fontWeight: 500, marginTop: 2 }}>{categories.find(c => c.id === selectedProduct.category_id)?.name || "—"}</div>
+                    <div style={{ fontSize: 14, fontWeight: 600, marginTop: 3 }}>{categories.find(c => c.id === selectedProduct.category_id)?.name || "—"}</div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 11, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Hardware Model</div>
+                    <div style={{ fontSize: 14, fontWeight: 600, marginTop: 3, color: "var(--primary)" }}>{selectedProduct.model || "—"}</div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 11, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Current OS Version</div>
+                    <div style={{ fontSize: 14, fontWeight: 600, marginTop: 3, display: "flex", alignItems: "center", gap: 6 }}>
+                      {(() => {
+                        const curVer = selectedProduct.versions?.find(v => v.is_current) || selectedProduct.versions?.[0];
+                        return (
+                          <>
+                            <span>{curVer?.version || "—"}</span>
+                            {curVer?.is_current && <span className="badge badge-blue" style={{ fontSize: 10, padding: "1px 6px" }}>Current</span>}
+                          </>
+                        );
+                      })()}
+                    </div>
                   </div>
                   <div>
                     <div style={{ fontSize: 11, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Product Family</div>
-                    <div style={{ fontSize: 13, fontWeight: 500, marginTop: 2 }}>{selectedProduct.product_family || "—"}</div>
+                    <div style={{ fontSize: 14, fontWeight: 500, marginTop: 3 }}>{selectedProduct.product_family || "—"}</div>
                   </div>
                   <div>
-                    <div style={{ fontSize: 11, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Versions</div>
-                    <div style={{ fontSize: 13, fontWeight: 500, marginTop: 2 }}>{selectedProduct.versions?.length || 0}</div>
+                    <div style={{ fontSize: 11, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Total Versions</div>
+                    <div style={{ fontSize: 14, fontWeight: 600, marginTop: 3 }}>{selectedProduct.versions?.length || 0}</div>
                   </div>
                 </div>
               </div>
@@ -423,7 +498,7 @@ export default function ProductsPage() {
               </div>
               <div className="table-wrap">
                 <table>
-                  <thead><tr><th>Version</th><th>Status</th><th>Current</th><th>Values</th><th>Action</th></tr></thead>
+                  <thead><tr><th>Version</th><th>Status</th><th>Current</th><th>Values</th><th style={{ textAlign: "right" }}>Actions</th></tr></thead>
                   <tbody>
                     {(selectedProduct.versions || []).map(v => (
                       <tr key={v.id} style={{ background: selectedVersionId === v.id ? "var(--primary-light)" : undefined }}>
@@ -432,12 +507,27 @@ export default function ProductsPage() {
                         <td>{v.is_current ? <span className="badge badge-blue">Current</span> : "—"}</td>
                         <td>{v.product_values?.length || 0} values</td>
                         <td>
-                          <button
-                            className="btn btn-secondary btn-sm"
-                            onClick={() => { setSelectedVersionId(v.id); }}
-                          >
-                            Select Version
-                          </button>
+                          <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+                            <button
+                              className="btn btn-secondary btn-sm"
+                              onClick={() => {
+                                versionForm.reset({
+                                  version: v.version,
+                                  support_status: v.support_status,
+                                  is_current: v.is_current,
+                                });
+                                setShowVersionModal({ open: true, productId: selectedProduct.id, versionToEdit: v });
+                              }}
+                            >
+                              <Edit2 size={12} /> Edit
+                            </button>
+                            <button
+                              className="btn btn-secondary btn-sm"
+                              onClick={() => { setSelectedVersionId(v.id); }}
+                            >
+                              {selectedVersionId === v.id ? "Selected" : "Select"}
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     ))}
@@ -929,7 +1019,7 @@ export default function ProductsPage() {
       {/* ── Product Modal (Create / Edit) ─────────────────────────────────────── */}
       {showProductModal.open && (
         <div className="modal-backdrop" onClick={() => setShowProductModal({ open: false })}>
-          <div className="modal" onClick={e => e.stopPropagation()}>
+          <div className="modal" style={{ maxWidth: 560 }} onClick={e => e.stopPropagation()}>
             <div className="modal-header">
               <div className="modal-title">{showProductModal.product ? "Edit Product" : "Add Product"}</div>
               <button className="btn btn-ghost btn-sm" onClick={() => setShowProductModal({ open: false })}><X size={16} /></button>
@@ -952,12 +1042,34 @@ export default function ProductsPage() {
                     </select>
                   </div>
                 </div>
-                <div className="form-group"><label className="form-label">Product Name *</label><input className="form-control" placeholder="FortiGate 1000F" {...productForm.register("name")} /></div>
-                <div className="grid-2">
-                  <div className="form-group"><label className="form-label">Model</label><input className="form-control" {...productForm.register("model")} /></div>
-                  <div className="form-group"><label className="form-label">Product Family</label><input className="form-control" {...productForm.register("product_family")} /></div>
+
+                <div className="form-group">
+                  <label className="form-label">Product Name *</label>
+                  <input className="form-control" placeholder="e.g. FortiGate 1000F" {...productForm.register("name")} />
                 </div>
-                <div className="form-group"><label className="form-label">Description</label><textarea className="form-control" {...productForm.register("description")} /></div>
+
+                <div className="grid-2">
+                  <div className="form-group">
+                    <label className="form-label">Hardware Model *</label>
+                    <input className="form-control" placeholder="e.g. FortiGate 1000F / PA-X Series" {...productForm.register("model")} />
+                    <div className="form-hint">Physical appliance or model designation</div>
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">Current OS Version *</label>
+                    <input className="form-control" placeholder="e.g. FortiOS 7.4.x / PAN-OS 11.x" {...productForm.register("current_os_version")} />
+                    <div className="form-hint">Firmware / operating system release</div>
+                  </div>
+                </div>
+
+                <div className="form-group">
+                  <label className="form-label">Product Family</label>
+                  <input className="form-control" placeholder="e.g. Enterprise Next-Generation Firewall (NGFW)" {...productForm.register("product_family")} />
+                </div>
+
+                <div className="form-group">
+                  <label className="form-label">Description</label>
+                  <textarea className="form-control" placeholder="Optional notes, specifications, or deployment architecture…" {...productForm.register("description")} />
+                </div>
               </div>
               <div className="modal-footer">
                 <button type="button" className="btn btn-secondary" onClick={() => setShowProductModal({ open: false })}>Cancel</button>
@@ -970,17 +1082,20 @@ export default function ProductsPage() {
         </div>
       )}
 
-      {/* ── Version Modal ─────────────────────────────────────────────────────── */}
+      {/* ── Version Modal (Add / Edit Version) ─────────────────────────────────── */}
       {showVersionModal.open && (
         <div className="modal-backdrop" onClick={() => setShowVersionModal({ open: false })}>
           <div className="modal" onClick={e => e.stopPropagation()}>
             <div className="modal-header">
-              <div className="modal-title">Add Version</div>
+              <div className="modal-title">{showVersionModal.versionToEdit ? "Edit Version" : "Add Version"}</div>
               <button className="btn btn-ghost btn-sm" onClick={() => setShowVersionModal({ open: false })}><X size={16} /></button>
             </div>
-            <form onSubmit={versionForm.handleSubmit((d) => createVersion.mutate(d as unknown as VersionForm))}>
+            <form onSubmit={versionForm.handleSubmit((d) => saveVersion.mutate(d as unknown as VersionForm))}>
               <div className="modal-body stack">
-                <div className="form-group"><label className="form-label">Version *</label><input className="form-control" placeholder="7.4.x" {...versionForm.register("version")} /></div>
+                <div className="form-group">
+                  <label className="form-label">OS / Firmware Version *</label>
+                  <input className="form-control" placeholder="e.g. FortiOS 7.4.4 / PAN-OS 11.1" {...versionForm.register("version")} />
+                </div>
                 <div className="form-group">
                   <label className="form-label">Support Status</label>
                   <select className="form-control" {...versionForm.register("support_status")}>
@@ -997,7 +1112,9 @@ export default function ProductsPage() {
               </div>
               <div className="modal-footer">
                 <button type="button" className="btn btn-secondary" onClick={() => setShowVersionModal({ open: false })}>Cancel</button>
-                <button type="submit" className="btn btn-primary" disabled={createVersion.isPending}>{createVersion.isPending ? "Adding…" : "Add Version"}</button>
+                <button type="submit" className="btn btn-primary" disabled={saveVersion.isPending}>
+                  {saveVersion.isPending ? "Saving…" : showVersionModal.versionToEdit ? "Update Version" : "Add Version"}
+                </button>
               </div>
             </form>
           </div>
