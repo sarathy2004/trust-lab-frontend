@@ -103,11 +103,21 @@ export const comparisonsApi = {
   rerank: (id: number) => request<ComparisonRun>(`/comparisons/${id}/rerank`, { method: "POST" }),
 };
 
+// ── User Reviews ──────────────────────────────────────────────────────────────
+export const userReviewsApi = {
+  getSummary: (deviceName: string, limit: number = 10) =>
+    request<UserReviewResponse>("/user-reviews/summary", {
+      method: "POST",
+      body: JSON.stringify({ device_name: deviceName, limit }),
+    }),
+};
+
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 export interface Category {
   id: number; name: string; code: string; description?: string; is_active: boolean; created_at: string; updated_at: string;
+
 }
 export interface CategoryCreate { name: string; code: string; description?: string; is_active?: boolean; }
 
@@ -208,3 +218,37 @@ export interface CharacteristicScore {
 }
 export interface OptionScore { option_id: number; option_name: string; child_score?: number; child_priority?: number; weighted_child_score?: number; raw_value?: Record<string, unknown>; }
 export interface EligibilityResult { product_id: number; status: string; failed_requirements_json?: unknown[]; }
+
+export interface UserReviewRequest {
+  device_name: string;
+  limit?: number;
+}
+export interface RedditComment {
+  comment_id: string;
+  author: string;
+  score: number;
+  body: string;
+  created_utc?: number;
+}
+export interface RedditPost {
+  post_id: string;
+  subreddit: string;
+  title: string;
+  author: string;
+  score: number;
+  upvote_ratio?: number;
+  url?: string;
+  permalink?: string;
+  selftext?: string;
+  num_comments: number;
+  comments: RedditComment[];
+  google_search_url?: string;
+}
+export interface UserReviewResponse {
+  device_name: string;
+  summary_report: string;
+  scraped_payload: RedditPost[];
+  post_count: number;
+  generated_at: string;
+}
+
