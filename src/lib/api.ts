@@ -117,11 +117,21 @@ export const comparisonsApi = {
   rerank: (id: number) => request<ComparisonRun>(`/comparisons/${id}/rerank`, { method: "POST" }),
 };
 
+// ── User Reviews ──────────────────────────────────────────────────────────────
+export const userReviewsApi = {
+  getSummary: (deviceName: string, limit: number = 10) =>
+    request<UserReviewResponse>("/user-reviews/summary", {
+      method: "POST",
+      body: JSON.stringify({ device_name: deviceName, limit }),
+    }),
+};
+
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 export interface Category {
   id: number; name: string; code: string; description?: string; is_active: boolean; created_at: string; updated_at: string;
+
 }
 export interface CategoryCreate { name: string; code: string; description?: string; is_active?: boolean; }
 
@@ -247,10 +257,47 @@ export interface RankedResult {
   eligibility_status: string; failed_requirements?: Array<{ characteristic: string; reason: string }>;
   group_scores: GroupScore[]; characteristic_scores: CharacteristicScore[];
 }
-export interface GroupScore { group_id: number; group_score?: number; group_weight?: number; weighted_group_score?: number; }
+export interface GroupScore {
+  group_id: number; group_name: string; group_code: string; display_order: number;
+  group_score?: number; group_weight?: number; weighted_group_score?: number;
+}
 export interface CharacteristicScore {
   tc_id: number; name: string; normalized_score?: number; weight?: number; weighted_score?: number;
   calculation_details?: Record<string, unknown>; option_results: OptionScore[];
 }
 export interface OptionScore { option_id: number; option_name: string; child_score?: number; child_priority?: number; weighted_child_score?: number; raw_value?: Record<string, unknown>; }
 export interface EligibilityResult { product_id: number; status: string; failed_requirements_json?: unknown[]; }
+
+export interface UserReviewRequest {
+  device_name: string;
+  limit?: number;
+}
+export interface RedditComment {
+  comment_id: string;
+  author: string;
+  score: number;
+  body: string;
+  created_utc?: number;
+}
+export interface RedditPost {
+  post_id: string;
+  subreddit: string;
+  title: string;
+  author: string;
+  score: number;
+  upvote_ratio?: number;
+  url?: string;
+  permalink?: string;
+  selftext?: string;
+  num_comments: number;
+  comments: RedditComment[];
+  google_search_url?: string;
+}
+export interface UserReviewResponse {
+  device_name: string;
+  summary_report: string;
+  scraped_payload: RedditPost[];
+  post_count: number;
+  generated_at: string;
+}
+

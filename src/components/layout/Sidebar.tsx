@@ -3,7 +3,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   LayoutDashboard, Shield, Package, BarChart3,
-  Settings, ChevronRight, FileText, Activity, Eye, GitCompare
+  Settings, ChevronRight, FileText, Activity, Eye, GitCompare, MessageSquare
 } from "lucide-react";
 
 const globalNav = [
@@ -17,9 +17,12 @@ const trustLabsNav = [
   { label: "Product Intelligence", href: "/trust-labs/products", icon: Package },
   { label: "Templates", href: "/trust-labs/templates", icon: FileText },
   { label: "Compare & Rank", href: "/trust-labs/comparisons", icon: GitCompare },
+  { label: "User Reviews", href: "/trust-labs/user-reviews", icon: MessageSquare },
+  { label: "Monitoring", href: "/trust-labs/monitoring", icon: Activity },
   { label: "Threat Intelligence", href: "/trust-labs/monitoring", icon: Activity },
   { label: "Reports", href: "/trust-labs/reports", icon: BarChart3 },
 ];
+
 
 export default function Sidebar() {
   const pathname = usePathname();
