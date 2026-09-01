@@ -8,25 +8,11 @@ import {
   FileText, MessageCircle, ExternalLink, Cpu, ShieldCheck, UserCheck, Layers, ChevronDown, ChevronUp
 } from "lucide-react";
 
-const PRESET_DEVICES = [
-  "Fortigate 80F",
-  "Fortigate 7121F",
-  "Palo Alto PA-3200",
-  "Cisco Firepower 2100",
-  "Check Point 1500"
-];
-
 export default function UserReviewsPage() {
-  const [deviceName, setDeviceName] = useState("Fortigate 80F");
+  const [deviceName, setDeviceName] = useState("");
   const [limit, setLimit] = useState(10);
   const [activeSubTab, setActiveSubTab] = useState<"report" | "threads">("report");
   const [expandedPosts, setExpandedPosts] = useState<Record<string, boolean>>({});
-
-  // Query catalog products for quick selection
-  const { data: catalogProducts = [] } = useQuery({
-    queryKey: ["products"],
-    queryFn: () => productsApi.list()
-  });
 
   // Mutation for fetching/synthesizing user review data from backend API
   const reviewMutation = useMutation({
@@ -71,7 +57,7 @@ export default function UserReviewsPage() {
                   type="text"
                   className="form-control"
                   style={{ paddingLeft: 36 }}
-                  placeholder="Enter device or product name (e.g. FortiGate 7121F)..."
+                  placeholder="Type device or product name (e.g. FortiGate 80F, Palo Alto PA-3200)..."
                   value={deviceName}
                   onChange={(e) => setDeviceName(e.target.value)}
                   onKeyDown={(e) => e.key === "Enter" && handleAnalyze()}
@@ -96,7 +82,7 @@ export default function UserReviewsPage() {
               <button
                 className="btn btn-primary"
                 onClick={() => handleAnalyze()}
-                disabled={isLoading}
+                disabled={isLoading || !deviceName.trim()}
                 style={{ display: "flex", alignItems: "center", gap: 8 }}
               >
                 {isLoading ? (
@@ -110,34 +96,9 @@ export default function UserReviewsPage() {
                 )}
               </button>
             </div>
-
-            {/* Quick Select Presets */}
-            <div style={{ marginTop: 14, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-              <span style={{ fontSize: 12, color: "var(--muted)", fontWeight: 500 }}>Quick Select:</span>
-              {PRESET_DEVICES.map(p => (
-                <button
-                  key={p}
-                  className={`btn btn-sm ${deviceName === p ? "btn-primary" : "btn-ghost"}`}
-                  onClick={() => handleAnalyze(p)}
-                  disabled={isLoading}
-                >
-                  {p}
-                </button>
-              ))}
-
-              {catalogProducts.length > 0 && catalogProducts.slice(0, 3).map(p => (
-                <button
-                  key={`cat-${p.id}`}
-                  className={`btn btn-sm ${deviceName === p.name ? "btn-primary" : "btn-ghost"}`}
-                  onClick={() => handleAnalyze(p.name)}
-                  disabled={isLoading}
-                >
-                  {p.name}
-                </button>
-              ))}
-            </div>
           </div>
         </div>
+
 
         {/* Loading State */}
         {isLoading && (
@@ -205,126 +166,34 @@ export default function UserReviewsPage() {
               </div>
             </div>
 
-            {/* Navigation Tabs (Report vs Scraped Threads) */}
-            <div style={{ display: "flex", gap: 12, borderBottom: "1px solid var(--border)", marginBottom: 20 }}>
-              <button
-                className={`btn ${activeSubTab === "report" ? "btn-primary" : "btn-ghost"}`}
-                onClick={() => setActiveSubTab("report")}
-                style={{ borderRadius: "8px 8px 0 0", borderBottom: activeSubTab === "report" ? "2px solid var(--primary)" : "none" }}
-              >
-                <FileText size={15} /> Executive Intelligence Report
-              </button>
-              <button
-                className={`btn ${activeSubTab === "threads" ? "btn-primary" : "btn-ghost"}`}
-                onClick={() => setActiveSubTab("threads")}
-                style={{ borderRadius: "8px 8px 0 0", borderBottom: activeSubTab === "threads" ? "2px solid var(--primary)" : "none" }}
-              >
-                <Layers size={15} /> Scraped Reddit Threads ({data.scraped_payload.length})
-              </button>
-            </div>
-
-            {/* Sub-Tab 1: Executive Intelligence Report */}
-            {activeSubTab === "report" && (
-              <div className="card">
-                <div className="card-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <div className="card-title">User Review & Operational Experience Summary</div>
+            {/* User Review Summary Card */}
+            <div className="card">
+              <div className="card-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <div className="card-title">User Review Summary</div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span className="badge badge-blue">Source: Reddit</span>
                   <span className="badge badge-green">In-Memory Synthesized</span>
                 </div>
-                <div className="card-body">
-                  <MarkdownRenderer content={data.summary_report} />
-                </div>
               </div>
-            )}
-
-            {/* Sub-Tab 2: Scraped Reddit Threads */}
-            {activeSubTab === "threads" && (
-              <div className="stack" style={{ gap: 16 }}>
-                {data.scraped_payload.length === 0 ? (
-                  <div className="card" style={{ padding: 32, textAlign: "center" }}>
-                    <MessageSquare size={32} style={{ color: "var(--muted)", margin: "0 auto 12px" }} />
-                    <p style={{ color: "var(--muted)" }}>No scraped Reddit threads available for this query.</p>
-                  </div>
-                ) : (
-                  data.scraped_payload.map((post, idx) => (
-                    <div key={post.post_id || idx} className="card">
-                      <div className="card-body">
-                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, marginBottom: 8 }}>
-                          <div>
-                            <span className="badge badge-blue" style={{ marginRight: 8 }}>{post.subreddit}</span>
-                            <span style={{ fontSize: 13, color: "var(--muted)", fontWeight: 500 }}>Posted by {post.author}</span>
-                          </div>
-                          <div style={{ display: "flex", alignItems: "center", gap: 12, fontSize: 13, color: "var(--muted)" }}>
-                            <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                              <ThumbsUp size={14} /> {post.score}
-                            </span>
-                            {post.permalink && (
-                              <a href={post.permalink} target="_blank" rel="noreferrer" style={{ color: "var(--primary)", display: "flex", alignItems: "center", gap: 3 }}>
-                                Reddit Link <ExternalLink size={12} />
-                              </a>
-                            )}
-                          </div>
-                        </div>
-
-                        <h4 style={{ fontSize: 16, fontWeight: 600, color: "var(--text)", marginBottom: 8 }}>
-                          {post.title}
-                        </h4>
-
-                        {post.selftext && (
-                          <p style={{ fontSize: 14, color: "var(--muted)", lineHeight: 1.5, marginBottom: 12, whiteSpace: "pre-wrap" }}>
-                            {post.selftext.length > 300 && !expandedPosts[post.post_id]
-                              ? `${post.selftext.slice(0, 300)}...`
-                              : post.selftext}
-                          </p>
-                        )}
-
-                        {post.comments && post.comments.length > 0 && (
-                          <div style={{ marginTop: 12, borderTop: "1px solid var(--border)", paddingTop: 12 }}>
-                            <button
-                              className="btn btn-ghost btn-sm"
-                              onClick={() => togglePostExpand(post.post_id)}
-                              style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13 }}
-                            >
-                              <MessageCircle size={14} />
-                              {post.comments.length} Comment Threads
-                              {expandedPosts[post.post_id] ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-                            </button>
-
-                            {expandedPosts[post.post_id] && (
-                              <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 10, paddingLeft: 14, borderLeft: "2px solid var(--border)" }}>
-                                {post.comments.map((c, cIdx) => (
-                                  <div key={c.comment_id || cIdx} style={{ fontSize: 13 }}>
-                                    <div style={{ fontWeight: 600, color: "var(--text)", marginBottom: 2 }}>
-                                      {c.author} <span style={{ fontWeight: 400, color: "var(--muted)", fontSize: 12 }}>({c.score} points)</span>
-                                    </div>
-                                    <div style={{ color: "var(--muted)", lineHeight: 1.4 }}>{c.body}</div>
-                                  </div>
-                                ))}
-                              </div>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  ))
-                )}
+              <div className="card-body">
+                <MarkdownRenderer content={data.summary_report} />
               </div>
-            )}
+            </div>
           </div>
         )}
+
 
         {/* Initial Empty / Prompt State */}
         {!data && !isLoading && !reviewMutation.isError && (
           <div className="card" style={{ textAlign: "center", padding: "54px 24px" }}>
             <MessageSquare size={44} style={{ color: "var(--primary)", margin: "0 auto 16px", opacity: 0.8 }} />
-            <h3 style={{ fontSize: 20, fontWeight: 600, marginBottom: 8 }}>Explore Real-World User Reviews</h3>
-            <p style={{ color: "var(--muted)", maxWidth: 540, margin: "0 auto 20px", fontSize: 14, lineHeight: 1.6 }}>
-              Select a target device above or type any enterprise security product name to fetch keyless Reddit community discussions and generate an AI-synthesized operational experience report.
+            <h3 style={{ fontSize: 20, fontWeight: 600, marginBottom: 8 }}>Search & Analyze Real-World User Reviews</h3>
+            <p style={{ color: "var(--muted)", maxWidth: 540, margin: "0 auto 12px", fontSize: 14, lineHeight: 1.6 }}>
+              Type any enterprise security device or product name into the search box above (e.g. <strong>FortiGate 80F</strong>, <strong>Palo Alto PA-3200</strong>, <strong>Cisco Firepower</strong>) to fetch Reddit community discussions and generate an AI-synthesized operational experience report.
             </p>
-            <button className="btn btn-primary" onClick={() => handleAnalyze()}>
-              Analyze Fortigate 80F
-            </button>
           </div>
         )}
+
       </div>
     </div>
   );
@@ -361,18 +230,24 @@ function MarkdownRenderer({ content }: { content: string }) {
             <tbody>
               {dataRows.map((row, rIdx) => (
                 <tr key={rIdx}>
-                  {row.map((cell, cIdx) => (
-                    <td key={cIdx}>
-                      {cell.trim().startsWith("`") && cell.trim().endsWith("`") ? (
-                        <code style={{ background: "var(--bg-subtle)", padding: "2px 6px", borderRadius: 4, fontSize: 12 }}>
-                          {cell.trim().replace(/`/g, "")}
-                        </code>
-                      ) : (
-                        cell.trim()
-                      )}
-                    </td>
-                  ))}
+                  {row.map((cell, cIdx) => {
+                    const rawVal = cell.trim();
+                    const cleanVal = cIdx === 0 ? rawVal.replace(/^`?u\//, "`").replace(/^u\//, "") : rawVal;
+                    return (
+                      <td key={cIdx} style={{ whiteSpace: "normal", wordBreak: "break-word", lineHeight: 1.5, padding: "10px 12px" }}>
+                        {cleanVal.startsWith("`") && cleanVal.endsWith("`") ? (
+                          <code style={{ background: "var(--bg-subtle)", padding: "2px 6px", borderRadius: 4, fontSize: 12 }}>
+                            {cleanVal.replace(/`/g, "").replace(/^u\//, "")}
+                          </code>
+                        ) : (
+                          cleanVal
+                        )}
+                      </td>
+                    );
+                  })}
                 </tr>
+
+
               ))}
             </tbody>
           </table>
