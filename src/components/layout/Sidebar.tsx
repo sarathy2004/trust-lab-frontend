@@ -18,8 +18,10 @@ const trustLabsNav = [
   { label: "Templates", href: "/trust-labs/templates", icon: FileText },
   { label: "Compare & Rank", href: "/trust-labs/comparisons", icon: GitCompare },
   { label: "Threat Intelligence", href: "/trust-labs/monitoring", icon: Activity },
+  { label: "User Reviews", href: "/trust-labs/user-reviews", icon: MessageSquare },
   { label: "Reports", href: "/trust-labs/reports", icon: BarChart3 },
 ];
+
 
 
 
@@ -60,7 +62,7 @@ export default function Sidebar() {
           <div className="sidebar-section-title">Trust Labs</div>
           {trustLabsNav.map(({ label, href, icon: Icon }) => (
             <Link
-              key={href}
+              key={label}
               href={href}
               className={`nav-item ${pathname === href ? "active" : ""}`}
             >
@@ -68,6 +70,7 @@ export default function Sidebar() {
               {label}
             </Link>
           ))}
+
         </div>
       )}
 
