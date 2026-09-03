@@ -8,7 +8,7 @@ import {
   vendorsApi, productsApi, categoriesApi, productClassesApi, characteristicsApi,
   type Product, type ProductVersion, type ProductValue, type ProductOptionValue, type Characteristic,
 } from "@/lib/api";
-import { Plus, Package, X, ChevronDown, ChevronRight, Edit2, Trash2, CheckCircle2, XCircle, AlertTriangle, Key, Shield, ShieldAlert, ShieldCheck } from "lucide-react";
+import { Plus, Package, X, ChevronDown, ChevronRight, Edit2, Trash2, CheckCircle2, XCircle, AlertTriangle, Key, Shield, ShieldAlert, ShieldCheck, Check } from "lucide-react";
 import { statusColor, characteristicTypeLabel, scoreColor } from "@/lib/formatting";
 
 const vendorSchema = z.object({
@@ -172,6 +172,23 @@ export default function ProductsPage() {
     },
     onError: (err: any) => {
       alert("Failed to save version: " + (err?.message || "Unknown error"));
+    },
+  });
+
+  const setCurrentVersion = useMutation({
+    mutationFn: async (versionId: number) => {
+      return await productsApi.updateVersion(versionId, { is_current: true });
+    },
+    onSuccess: async (updatedVer) => {
+      await qc.invalidateQueries({ queryKey: ["products"] });
+      if (selectedProduct) {
+        const refreshed = await productsApi.get(selectedProduct.id);
+        setSelectedProduct(refreshed);
+        setSelectedVersionId(updatedVer.id);
+      }
+    },
+    onError: (err: any) => {
+      alert("Failed to set current version: " + (err?.message || "Unknown error"));
     },
   });
 
@@ -507,7 +524,7 @@ export default function ProductsPage() {
                         <td>{v.is_current ? <span className="badge badge-blue">Current</span> : "—"}</td>
                         <td>{v.product_values?.length || 0} values</td>
                         <td>
-                          <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+                          <div style={{ display: "flex", gap: 6, justifyContent: "flex-end", alignItems: "center" }}>
                             <button
                               className="btn btn-secondary btn-sm"
                               onClick={() => {
@@ -521,11 +538,26 @@ export default function ProductsPage() {
                             >
                               <Edit2 size={12} /> Edit
                             </button>
+                            {v.is_current ? (
+                              <span className="badge badge-blue" style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "4px 8px" }}>
+                                <Check size={11} /> Current OS
+                              </span>
+                            ) : (
+                              <button
+                                className="btn btn-secondary btn-sm"
+                                disabled={setCurrentVersion.isPending}
+                                onClick={() => setCurrentVersion.mutate(v.id)}
+                                title="Make this the active Current OS version for rankings, evaluations, and threat intelligence"
+                              >
+                                Set as Current
+                              </button>
+                            )}
                             <button
-                              className="btn btn-secondary btn-sm"
+                              className={`btn btn-sm ${selectedVersionId === v.id ? "btn-primary" : "btn-secondary"}`}
                               onClick={() => { setSelectedVersionId(v.id); }}
+                              title="Inspect and edit characteristics for this version"
                             >
-                              {selectedVersionId === v.id ? "Selected" : "Select"}
+                              {selectedVersionId === v.id ? "Viewing Values" : "View Values"}
                             </button>
                           </div>
                         </td>

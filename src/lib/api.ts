@@ -263,7 +263,7 @@ export interface GroupScore {
 }
 export interface CharacteristicScore {
   tc_id: number; name: string; normalized_score?: number; weight?: number; weighted_score?: number;
-  calculation_details?: Record<string, unknown>; option_results: OptionScore[];
+  status?: string; calculation_details?: Record<string, unknown>; option_results: OptionScore[];
 }
 export interface OptionScore { option_id: number; option_name: string; child_score?: number; child_priority?: number; weighted_child_score?: number; raw_value?: Record<string, unknown>; }
 export interface EligibilityResult { product_id: number; status: string; failed_requirements_json?: unknown[]; }
