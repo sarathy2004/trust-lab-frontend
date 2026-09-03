@@ -6,7 +6,7 @@ import {
   type RankingTemplate, type Product, type RankedResult,
 } from "@/lib/api";
 import Link from "next/link";
-import { Plus, ChevronRight, Star, AlertCircle, CheckCircle, XCircle, RefreshCw } from "lucide-react";
+import { Plus, ChevronRight, Star, AlertCircle, CheckCircle, XCircle, RefreshCw, Info } from "lucide-react";
 import { fmt, pct, scoreColor } from "@/lib/formatting";
 import { RadarChart, Radar, PolarGrid, PolarAngleAxis, PolarRadiusAxis, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid, Legend, Cell } from "recharts";
 
@@ -204,10 +204,15 @@ function getDimensions(result: RankedResult): { code: string; name: string; scor
     .map(gs => ({ code: gs.group_code, name: gs.group_name, score: gs.group_score }));
 }
 
+function getMissingCharacteristics(result: RankedResult) {
+  return result.characteristic_scores.filter(cs => cs.status && cs.status !== "CALCULATED");
+}
+
 function ResultsView({ runId, assetProductId }: { runId: number; assetProductId?: number }) {
   const qc = useQueryClient();
   const [activeTab, setActiveTab] = useState<"ranking" | "breakdown" | "radar">("ranking");
   const [selectedProductId, setSelectedProductId] = useState<number | null>(null);
+  const [showLimitations, setShowLimitations] = useState(false);
 
   const { data: results = [], isLoading } = useQuery({
     queryKey: ["comparison-results", runId],
@@ -466,17 +471,77 @@ function ResultsView({ runId, assetProductId }: { runId: number; assetProductId?
 
               {/* Characteristic Scores */}
               <div className="card">
-                <div className="card-header"><div className="card-title">Characteristic Breakdown</div></div>
+                <div className="card-header" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", position: "relative" }}>
+                  <div className="card-title">Characteristic Breakdown</div>
+                  <div style={{ position: "relative" }}>
+                    <button
+                      type="button"
+                      onClick={() => setShowLimitations(v => !v)}
+                      title="Data limitations"
+                      style={{
+                        display: "flex", alignItems: "center", justifyContent: "center",
+                        width: 24, height: 24, borderRadius: "50%", border: "1px solid var(--border)",
+                        background: getMissingCharacteristics(selectedResult).length > 0 ? "rgba(245,158,11,0.12)" : "transparent",
+                        color: getMissingCharacteristics(selectedResult).length > 0 ? "var(--warning)" : "var(--muted)",
+                        cursor: "pointer",
+                      }}
+                    >
+                      <Info size={14} />
+                    </button>
+                    {showLimitations && (
+                      <div style={{
+                        position: "absolute", top: 30, right: 0, zIndex: 10, width: 300,
+                        background: "var(--card-bg, #fff)", border: "1px solid var(--border)", borderRadius: 8,
+                        boxShadow: "0 8px 24px rgba(0,0,0,0.15)", padding: 12, fontSize: 12,
+                      }}>
+                        <div style={{ fontWeight: 700, marginBottom: 6 }}>Data Limitations</div>
+                        {getMissingCharacteristics(selectedResult).length === 0 ? (
+                          <div style={{ color: "var(--muted)" }}>All characteristics have recorded data for this product.</div>
+                        ) : (
+                          <>
+                            <div style={{ color: "var(--muted)", marginBottom: 8 }}>
+                              {getMissingCharacteristics(selectedResult).length} of {selectedResult.characteristic_scores.length} characteristics have no recorded data and were excluded from this product&apos;s score (not counted as 0).
+                            </div>
+                            <ul style={{ margin: 0, paddingLeft: 16 }}>
+                              {getMissingCharacteristics(selectedResult).map(cs => (
+                                <li key={cs.tc_id} style={{ marginBottom: 4 }}>
+                                  <strong>{cs.name}</strong>
+                                  {Boolean((cs.calculation_details as any)?.reason) && (
+                                    <span style={{ color: "var(--muted)" }}> — {String((cs.calculation_details as any)?.reason)}</span>
+                                  )}
+                                </li>
+                              ))}
+                            </ul>
+                          </>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
                 <div style={{ padding: "8px 20px" }}>
-                  {selectedResult.characteristic_scores.map(cs => (
+                  {selectedResult.characteristic_scores.map(cs => {
+                    const isNA = Boolean(cs.status && cs.status !== "CALCULATED");
+                    return (
                     <div key={cs.tc_id}>
                       <div className="breakdown-row">
                         <div className="breakdown-name">{cs.name}</div>
-                        <div className="score-bar" style={{ width: 160 }}>
-                          <div className="score-bar-track"><div className="score-bar-fill" style={{ width: `${cs.normalized_score || 0}%`, background: scoreColor(cs.normalized_score) }} /></div>
-                        </div>
-                        <div className="breakdown-score" style={{ color: scoreColor(cs.normalized_score) }}>{fmt(cs.normalized_score)}</div>
-                        <div className="breakdown-weight">{pct(cs.weight)}</div>
+                        {isNA ? (
+                          <>
+                            <div className="score-bar" style={{ width: 160 }}>
+                              <div className="score-bar-track"><div className="score-bar-fill" style={{ width: "100%", background: "repeating-linear-gradient(45deg, #E2E8F0, #E2E8F0 4px, #F1F5F9 4px, #F1F5F9 8px)" }} /></div>
+                            </div>
+                            <div className="breakdown-score" style={{ color: "var(--muted)" }} title={String((cs.calculation_details as any)?.reason || "No data available")}>N/A</div>
+                            <div className="breakdown-weight">—</div>
+                          </>
+                        ) : (
+                          <>
+                            <div className="score-bar" style={{ width: 160 }}>
+                              <div className="score-bar-track"><div className="score-bar-fill" style={{ width: `${cs.normalized_score || 0}%`, background: scoreColor(cs.normalized_score) }} /></div>
+                            </div>
+                            <div className="breakdown-score" style={{ color: scoreColor(cs.normalized_score) }}>{fmt(cs.normalized_score)}</div>
+                            <div className="breakdown-weight">{pct(cs.weight)}</div>
+                          </>
+                        )}
                       </div>
                       {/* Threat Intel details */}
                       {Boolean(cs.name === "Threat Intelligence" || (cs.calculation_details && (cs.calculation_details.method === "THREAT_SCORE" || cs.calculation_details.method === "RISK"))) && (
@@ -499,24 +564,28 @@ function ResultsView({ runId, assetProductId }: { runId: number; assetProductId?
                       {/* Child options */}
                       {cs.option_results.length > 0 && (
                         <div style={{ paddingLeft: 20, paddingBottom: 8 }}>
-                          {cs.option_results.map(or => (
+                          {cs.option_results.map(or => {
+                            const childNA = or.child_score == null;
+                            return (
                             <div key={or.option_id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 0", fontSize: 12, color: "var(--muted)" }}>
                               <div style={{
                                 width: 14, height: 14, borderRadius: "50%", flexShrink: 0,
-                                background: or.child_score === 100 ? "var(--success)" : or.child_score === 0 ? "var(--danger)" : "var(--warning)",
+                                background: childNA ? "#CBD5E1" : or.child_score === 100 ? "var(--success)" : or.child_score === 0 ? "var(--danger)" : "var(--warning)",
                                 display: "flex", alignItems: "center", justifyContent: "center",
                               }}>
-                                {or.child_score === 100 ? <CheckCircle size={10} style={{ color: "white" }} /> : <XCircle size={10} style={{ color: "white" }} />}
+                                {childNA ? null : or.child_score === 100 ? <CheckCircle size={10} style={{ color: "white" }} /> : <XCircle size={10} style={{ color: "white" }} />}
                               </div>
                               <span style={{ flex: 1 }}>{or.option_name}</span>
-                              <span style={{ fontWeight: 600, color: "var(--text)" }}>{fmt(or.child_score)}</span>
+                              <span style={{ fontWeight: 600, color: childNA ? "var(--muted)" : "var(--text)" }}>{childNA ? "N/A" : fmt(or.child_score)}</span>
                               <span style={{ color: "var(--muted)" }}>P{or.child_priority}</span>
                             </div>
-                          ))}
+                            );
+                          })}
                         </div>
                       )}
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
             </div>
